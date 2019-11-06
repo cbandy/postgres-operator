@@ -189,7 +189,6 @@ PostgreSQL Operator:
 * `pgo_admin_role_name`
 * `pgo_admin_perms`
 * `pgo_operator_namespace`
-* `namespace`
 * `pgo_image_prefix`
 * `pgo_image_tag`
 * `ccp_image_prefix`
