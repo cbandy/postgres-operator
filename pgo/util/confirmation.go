@@ -17,6 +17,9 @@ package util
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"strings"
 )
 
 // AskForConfirmation uses Scanln to parse user input. A user must type in "yes" or "no" and
@@ -25,46 +28,39 @@ import (
 // until it gets a valid response from the user. Typically, you should use fmt to print out a question
 // before calling AskForConfirmation. E.g. fmt.Println("WARNING: Are you sure? (yes/no)")
 func AskForConfirmation(NoPrompt bool, msg string) bool {
+	prompt := "WARNING - " + msg + " (yes/no): "
+	if msg == "" {
+		prompt = "WARNING: Are you sure? (yes/no): "
+	}
+
+	return NoPrompt || askForConfirmation(os.Stdin, os.Stdout, prompt)
+}
+
+func askForConfirmation(in io.Reader, out io.Writer, prompt string) bool {
 	var response string
 
-	if NoPrompt {
-		return true
-	}
-	if msg == "" {
-		fmt.Print("WARNING: Are you sure? (yes/no): ")
-	} else {
-		fmt.Print("WARNING - " + msg + " (yes/no): ")
-	}
-
-	_, err := fmt.Scanln(&response)
-	if err != nil {
-		fmt.Println("Please type yes or no and then press enter:")
-		return AskForConfirmation(NoPrompt, msg)
-	}
-	okayResponses := []string{"y", "Y", "yes", "Yes", "YES"}
-	nokayResponses := []string{"n", "N", "no", "No", "NO", ""}
-	if containsString(okayResponses, response) {
-		return true
-	} else if containsString(nokayResponses, response) {
-		return false
-	} else {
-		fmt.Println("Please type yes or no and then press enter:")
-		return AskForConfirmation(NoPrompt, msg)
-	}
-}
-
-// posString returns the first index of element in slice.
-// If slice does not contain element, returns -1.
-func posString(slice []string, element string) int {
-	for index, elem := range slice {
-		if elem == element {
-			return index
+	// ask for input a few times then give up
+	remaining := 5
+	for {
+		fmt.Fprint(out, prompt)
+		if _, err := fmt.Fscanln(in, &response); err == io.EOF {
+			return false
 		}
-	}
-	return -1
-}
+		response = strings.ToLower(response)
 
-// containsString returns true iff slice contains element
-func containsString(slice []string, element string) bool {
-	return !(posString(slice, element) == -1)
+		if response == "y" || response == "yes" {
+			return true
+		}
+		if response == "n" || response == "no" {
+			return false
+		}
+
+		if remaining--; remaining < 1 {
+			break
+		}
+		fmt.Fprintln(out, "Please type yes or no and then press enter:")
+	}
+
+	fmt.Fprintln(out, "Assuming no...")
+	return false
 }
