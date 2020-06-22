@@ -28,29 +28,17 @@ import (
 	crv1 "github.com/crunchydata/postgres-operator/pkg/apis/crunchydata.com/v1"
 	msgs "github.com/crunchydata/postgres-operator/pkg/apiservermsgs"
 	"github.com/crunchydata/postgres-operator/pkg/events"
+	pgo "github.com/crunchydata/postgres-operator/pkg/generated/clientset/versioned"
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/apps/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/rest"
 )
 
 // CreatePolicy ...
-func CreatePolicy(RESTClient *rest.RESTClient, policyName, policyURL, policyFile, ns, pgouser string) (bool, error) {
+func CreatePolicy(client pgo.Interface, policyName, policyURL, policyFile, ns, pgouser string) (bool, error) {
 
-	var found bool
 	log.Debugf("create policy called for %s", policyName)
-	result := crv1.Pgpolicy{}
-
-	// error if it already exists
-	found, err := kubeapi.Getpgpolicy(RESTClient, &result, policyName, ns)
-	if err == nil {
-		log.Debugf("pgpolicy %s was found so we will not create it", policyName)
-		return true, err
-	} else if !found {
-		log.Debugf("pgpolicy %s was not found so we will create it", policyName)
-	} else {
-		return false, err
-	}
 
 	// Create an instance of our CRD
 	spec := crv1.PgpolicySpec{}
@@ -70,11 +58,11 @@ func CreatePolicy(RESTClient *rest.RESTClient, policyName, policyURL, policyFile
 		Spec: spec,
 	}
 
-	err = kubeapi.Createpgpolicy(RESTClient,
-		newInstance, ns)
+	_, err := client.CrunchydataV1().Pgpolicies(ns).Create(newInstance)
 
-	if err != nil {
-		return false, err
+	if kerrors.IsAlreadyExists(err) {
+		log.Debugf("pgpolicy %s was found so we will not create it", policyName)
+		return true, nil
 	}
 
 	return false, err
@@ -82,26 +70,20 @@ func CreatePolicy(RESTClient *rest.RESTClient, policyName, policyURL, policyFile
 }
 
 // ShowPolicy ...
-func ShowPolicy(RESTClient *rest.RESTClient, name string, allflags bool, ns string) crv1.PgpolicyList {
+func ShowPolicy(client pgo.Interface, name string, allflags bool, ns string) crv1.PgpolicyList {
 	policyList := crv1.PgpolicyList{}
 
 	if allflags {
 		//get a list of all policies
-		err := kubeapi.Getpgpolicies(RESTClient,
-			&policyList,
-			ns)
-		if err != nil {
-			return policyList
+		list, err := client.CrunchydataV1().Pgpolicies(ns).List(metav1.ListOptions{})
+		if list != nil && err == nil {
+			policyList = *list
 		}
 	} else {
-		policy := crv1.Pgpolicy{}
-		_, err := kubeapi.Getpgpolicy(RESTClient,
-			&policy, name, ns)
-		if err != nil {
-			return policyList
+		policy, err := client.CrunchydataV1().Pgpolicies(ns).Get(name, metav1.GetOptions{})
+		if policy != nil && err == nil {
+			policyList.Items = []crv1.Pgpolicy{*policy}
 		}
-		policyList.Items = make([]crv1.Pgpolicy, 1)
-		policyList.Items[0] = policy
 	}
 
 	return policyList
@@ -109,17 +91,13 @@ func ShowPolicy(RESTClient *rest.RESTClient, name string, allflags bool, ns stri
 }
 
 // DeletePolicy ...
-func DeletePolicy(RESTClient *rest.RESTClient, policyName, ns, pgouser string) msgs.DeletePolicyResponse {
+func DeletePolicy(client pgo.Interface, policyName, ns, pgouser string) msgs.DeletePolicyResponse {
 	resp := msgs.DeletePolicyResponse{}
 	resp.Status.Code = msgs.Ok
 	resp.Status.Msg = ""
 	resp.Results = make([]string, 0)
 
-	var err error
-
-	policyList := crv1.PgpolicyList{}
-	err = kubeapi.Getpgpolicies(RESTClient,
-		&policyList, ns)
+	policyList, err := client.CrunchydataV1().Pgpolicies(ns).List(metav1.ListOptions{})
 	if err != nil {
 		resp.Status.Code = msgs.Error
 		resp.Status.Msg = err.Error()
@@ -134,12 +112,11 @@ func DeletePolicy(RESTClient *rest.RESTClient, policyName, ns, pgouser string) m
 			//we can create an event holding the pgouser
 			//that deleted the policy
 			policy.ObjectMeta.Labels[config.LABEL_PGOUSER] = pgouser
-			err = kubeapi.Updatepgpolicy(RESTClient, &policy, policy.Spec.Name, ns)
+			_, err = client.CrunchydataV1().Pgpolicies(ns).Update(&policy)
 
 			//ok, now delete the pgpolicy
 			policyFound = true
-			err = kubeapi.Deletepgpolicy(RESTClient,
-				policy.Spec.Name, ns)
+			err = client.CrunchydataV1().Pgpolicies(ns).Delete(policy.Spec.Name, &metav1.DeleteOptions{})
 			if err == nil {
 				msg := "deleted policy " + policy.Spec.Name
 				log.Debug(msg)

@@ -79,14 +79,8 @@ func (p PolicyJob) Run() {
 		return
 	}
 
-	policy := crv1.Pgpolicy{}
-	found, err = kubeapi.Getpgpolicy(restClient, &policy, p.policy, p.namespace)
-	if !found {
-		contextLogger.WithFields(log.Fields{
-			"error": err,
-		}).Error("pgPolicy not found")
-		return
-	} else if err != nil {
+	policy, err := pgoClient.CrunchydataV1().Pgpolicies(p.namespace).Get(p.policy, metav1.GetOptions{})
+	if err != nil {
 		contextLogger.WithFields(log.Fields{
 			"error": err,
 		}).Error("error retrieving pgPolicy")

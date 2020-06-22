@@ -1029,16 +1029,8 @@ func validateConfigPolicies(clusterName, PoliciesFlag, ns string) error {
 	policies := strings.Split(configPolicies, ",")
 
 	for _, v := range policies {
-		result := crv1.Pgpolicy{}
-
 		// error if it already exists
-		found, err := kubeapi.Getpgpolicy(apiserver.RESTClient,
-			&result, v, ns)
-		if !found {
-			log.Error("policy " + v + " specified in configuration was not found")
-			return err
-		}
-
+		_, err := apiserver.PGOClientset.CrunchydataV1().Pgpolicies(ns).Get(v, metav1.GetOptions{})
 		if err != nil {
 			log.Error("error getting pgpolicy " + v + err.Error())
 			return err
