@@ -24,12 +24,12 @@ import (
 	"time"
 
 	"github.com/crunchydata/postgres-operator/internal/config"
-	"github.com/crunchydata/postgres-operator/internal/kubeapi"
 	"github.com/crunchydata/postgres-operator/internal/operator"
 	"github.com/crunchydata/postgres-operator/internal/operator/pvc"
 	"github.com/crunchydata/postgres-operator/internal/util"
 	crv1 "github.com/crunchydata/postgres-operator/pkg/apis/crunchydata.com/v1"
 	"github.com/crunchydata/postgres-operator/pkg/events"
+	pgo "github.com/crunchydata/postgres-operator/pkg/generated/clientset/versioned"
 
 	log "github.com/sirupsen/logrus"
 	apps_v1 "k8s.io/api/apps/v1"
@@ -60,7 +60,7 @@ const (
 	crunchyadmCCPImage = "crunchy-admin"
 )
 
-func AddClusterBase(clientset kubernetes.Interface, client *rest.RESTClient, cl *crv1.Pgcluster, namespace string) {
+func AddClusterBase(clientset kubernetes.Interface, pgoClient pgo.Interface, client *rest.RESTClient, cl *crv1.Pgcluster, namespace string) {
 	var err error
 
 	if cl.Spec.Status == crv1.CompletedStatus {
@@ -84,7 +84,7 @@ func AddClusterBase(clientset kubernetes.Interface, client *rest.RESTClient, cl 
 		return
 	}
 
-	if err = addClusterCreateDeployments(clientset, client, cl, namespace, dataVolume, walVolume, tablespaceVolumes); err != nil {
+	if err = addClusterCreateDeployments(clientset, pgoClient, cl, namespace, dataVolume, walVolume, tablespaceVolumes); err != nil {
 		publishClusterCreateFailure(cl, err.Error())
 		return
 	}
@@ -161,13 +161,8 @@ func AddClusterBase(clientset kubernetes.Interface, client *rest.RESTClient, cl 
 					Message: "Created, not processed yet",
 				},
 			}
-			result := crv1.Pgreplica{}
 
-			err = client.Post().
-				Resource(crv1.PgreplicaResourcePlural).
-				Namespace(namespace).
-				Body(newInstance).
-				Do().Into(&result)
+			_, err = pgoClient.CrunchydataV1().Pgreplicas(namespace).Create(newInstance)
 			if err != nil {
 				log.Error(" in creating Pgreplica instance" + err.Error())
 				publishClusterCreateFailure(cl, err.Error())
@@ -211,8 +206,7 @@ func DeleteClusterBase(clientset kubernetes.Interface, restclient *rest.RESTClie
 }
 
 // ScaleBase ...
-func ScaleBase(clientset kubernetes.Interface, client *rest.RESTClient, replica *crv1.Pgreplica, namespace string) {
-	var err error
+func ScaleBase(clientset kubernetes.Interface, pgoClient pgo.Interface, client *rest.RESTClient, replica *crv1.Pgreplica, namespace string) {
 
 	if replica.Spec.Status == crv1.CompletedStatus {
 		log.Warn("crv1 pgreplica " + replica.Spec.Name + " is already marked complete, will not recreate")
@@ -220,18 +214,16 @@ func ScaleBase(clientset kubernetes.Interface, client *rest.RESTClient, replica 
 	}
 
 	//get the pgcluster CRD to base the replica off of
-	cluster := crv1.Pgcluster{}
-	_, err = kubeapi.Getpgcluster(client, &cluster,
-		replica.Spec.ClusterName, namespace)
+	cluster, err := pgoClient.CrunchydataV1().Pgclusters(namespace).Get(replica.Spec.ClusterName, metav1.GetOptions{})
 	if err != nil {
 		return
 	}
 
 	dataVolume, walVolume, tablespaceVolumes, err := pvc.CreateMissingPostgreSQLVolumes(
-		clientset, &cluster, namespace, replica.Spec.Name, replica.Spec.ReplicaStorage)
+		clientset, cluster, namespace, replica.Spec.Name, replica.Spec.ReplicaStorage)
 	if err != nil {
 		log.Error(err)
-		publishScaleError(namespace, replica.ObjectMeta.Labels[config.LABEL_PGOUSER], &cluster)
+		publishScaleError(namespace, replica.ObjectMeta.Labels[config.LABEL_PGOUSER], cluster)
 		return
 	}
 
@@ -242,15 +234,15 @@ func ScaleBase(clientset kubernetes.Interface, client *rest.RESTClient, replica 
 	}
 
 	//create the replica service if it doesnt exist
-	if err = scaleReplicaCreateMissingService(clientset, replica, &cluster, namespace); err != nil {
+	if err = scaleReplicaCreateMissingService(clientset, replica, cluster, namespace); err != nil {
 		log.Error(err)
-		publishScaleError(namespace, replica.ObjectMeta.Labels[config.LABEL_PGOUSER], &cluster)
+		publishScaleError(namespace, replica.ObjectMeta.Labels[config.LABEL_PGOUSER], cluster)
 		return
 	}
 
 	//instantiate the replica
-	if err = scaleReplicaCreateDeployment(clientset, client, replica, &cluster, namespace, dataVolume, walVolume, tablespaceVolumes); err != nil {
-		publishScaleError(namespace, replica.ObjectMeta.Labels[config.LABEL_PGOUSER], &cluster)
+	if err = scaleReplicaCreateDeployment(clientset, client, replica, cluster, namespace, dataVolume, walVolume, tablespaceVolumes); err != nil {
+		publishScaleError(namespace, replica.ObjectMeta.Labels[config.LABEL_PGOUSER], cluster)
 		return
 	}
 
@@ -282,13 +274,10 @@ func ScaleBase(clientset kubernetes.Interface, client *rest.RESTClient, replica 
 }
 
 // ScaleDownBase ...
-func ScaleDownBase(clientset kubernetes.Interface, client *rest.RESTClient, replica *crv1.Pgreplica, namespace string) {
-	var err error
+func ScaleDownBase(clientset kubernetes.Interface, pgoClient pgo.Interface, replica *crv1.Pgreplica, namespace string) {
 
 	//get the pgcluster CRD for this replica
-	cluster := crv1.Pgcluster{}
-	_, err = kubeapi.Getpgcluster(client, &cluster,
-		replica.Spec.ClusterName, namespace)
+	_, err := pgoClient.CrunchydataV1().Pgclusters(namespace).Get(replica.Spec.ClusterName, metav1.GetOptions{})
 	if err != nil {
 		return
 	}
