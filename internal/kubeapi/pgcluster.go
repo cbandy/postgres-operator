@@ -25,7 +25,7 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-func PatchpgclusterStatus(restclient *rest.RESTClient, state crv1.PgclusterState, message string, oldCrd *crv1.Pgcluster, namespace string) error {
+func PatchpgclusterStatus(restclient rest.Interface, state crv1.PgclusterState, message string, oldCrd *crv1.Pgcluster, namespace string) error {
 
 	oldData, err := json.Marshal(oldCrd)
 	if err != nil {

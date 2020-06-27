@@ -32,7 +32,6 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/util"
 	crv1 "github.com/crunchydata/postgres-operator/pkg/apis/crunchydata.com/v1"
 	"github.com/crunchydata/postgres-operator/pkg/events"
-	pgo "github.com/crunchydata/postgres-operator/pkg/generated/clientset/versioned"
 	log "github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
@@ -40,7 +39,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 // addClusterCreateMissingService creates a service for the cluster primary if
@@ -84,7 +82,7 @@ func addClusterCreateMissingService(clientset kubernetes.Interface, cl *crv1.Pgc
 }
 
 // addClusterCreateDeployments creates deployments for pgBackRest and PostgreSQL.
-func addClusterCreateDeployments(clientset kubernetes.Interface, pgoClient pgo.Interface,
+func addClusterCreateDeployments(clientset kubeapi.Interface,
 	cl *crv1.Pgcluster, namespace string,
 	dataVolume, walVolume operator.StorageResult,
 	tablespaceVolumes map[string]operator.StorageResult,
@@ -235,7 +233,7 @@ func addClusterCreateDeployments(clientset kubernetes.Interface, pgoClient pgo.I
 	// patch in the correct current primary value to the CRD spec, as well as
 	// any updated user labels. This will handle both new and updated clusters.
 	// Note: in previous operator versions, this was stored in a user label
-	if err = util.PatchClusterCRD(pgoClient, cl.Spec.UserLabels, cl, cl.Annotations[config.ANNOTATION_CURRENT_PRIMARY], namespace); err != nil {
+	if err = util.PatchClusterCRD(clientset, cl.Spec.UserLabels, cl, cl.Annotations[config.ANNOTATION_CURRENT_PRIMARY], namespace); err != nil {
 		log.Error("could not patch primary crv1 with labels")
 		return err
 	}
@@ -244,7 +242,7 @@ func addClusterCreateDeployments(clientset kubernetes.Interface, pgoClient pgo.I
 }
 
 // DeleteCluster ...
-func DeleteCluster(clientset kubernetes.Interface, restclient *rest.RESTClient, cl *crv1.Pgcluster, namespace string) error {
+func DeleteCluster(clientset kubernetes.Interface, cl *crv1.Pgcluster, namespace string) error {
 
 	var err error
 	log.Info("deleting Pgcluster object" + " in namespace " + namespace)
@@ -301,7 +299,7 @@ func scaleReplicaCreateMissingService(clientset kubernetes.Interface, replica *c
 }
 
 // scaleReplicaCreateDeployment creates a deployment for the cluster replica.
-func scaleReplicaCreateDeployment(clientset kubernetes.Interface, client *rest.RESTClient,
+func scaleReplicaCreateDeployment(clientset kubernetes.Interface,
 	replica *crv1.Pgreplica, cluster *crv1.Pgcluster, namespace string,
 	dataVolume, walVolume operator.StorageResult,
 	tablespaceVolumes map[string]operator.StorageResult,
@@ -506,8 +504,7 @@ type ScaleClusterInfo struct {
 // ShutdownCluster is responsible for shutting down a cluster that is currently running.  This
 // includes changing the replica count for all clusters to 0, and then updating the pgcluster
 // with a shutdown status.
-func ShutdownCluster(clientset kubernetes.Interface, pgoClient pgo.Interface, restclient *rest.RESTClient,
-	cluster crv1.Pgcluster) error {
+func ShutdownCluster(clientset kubeapi.Interface, cluster crv1.Pgcluster) error {
 
 	// first ensure the current primary deployment is properly recorded in the pg
 	// cluster. Only consider primaries that are running, as there could be
@@ -539,7 +536,7 @@ func ShutdownCluster(clientset kubernetes.Interface, pgoClient pgo.Interface, re
 	cluster.Annotations[config.ANNOTATION_PRIMARY_DEPLOYMENT] =
 		primaryPod.Labels[config.LABEL_DEPLOYMENT_NAME]
 
-	if _, err := pgoClient.CrunchydataV1().Pgclusters(cluster.Namespace).Update(&cluster); err != nil {
+	if _, err := clientset.CrunchydataV1().Pgclusters(cluster.Namespace).Update(&cluster); err != nil {
 		return fmt.Errorf("Cluster Operator: Unable to update the current primary deployment "+
 			"in the pgcluster when shutting down cluster %s", cluster.Name)
 	}
@@ -558,7 +555,7 @@ func ShutdownCluster(clientset kubernetes.Interface, pgoClient pgo.Interface, re
 	message := fmt.Sprintf("Database shutdown along with the following services: %v",
 		append(make([]string, 0), clusterInfo.PGBackRestRepoDeployment,
 			clusterInfo.PGBouncerDeployment))
-	if err := kubeapi.PatchpgclusterStatus(restclient, crv1.PgclusterStateShutdown,
+	if err := kubeapi.PatchpgclusterStatus(clientset.Discovery().RESTClient(), crv1.PgclusterStateShutdown,
 		message, &cluster, cluster.Namespace); err != nil {
 		return err
 	}

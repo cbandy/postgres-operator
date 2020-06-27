@@ -77,7 +77,7 @@ func main() {
 	PGHA_PGBACKREST_LOCAL_S3_STORAGE, _ := strconv.ParseBool(os.Getenv("PGHA_PGBACKREST_LOCAL_S3_STORAGE"))
 	log.Debugf("setting PGHA_PGBACKREST_LOCAL_S3_STORAGE to %v", PGHA_PGBACKREST_LOCAL_S3_STORAGE)
 
-	config, clientset, err := kubeapi.NewKubeClient()
+	client, err := kubeapi.NewClient()
 	if err != nil {
 		panic(err)
 	}
@@ -122,7 +122,7 @@ func main() {
 
 	log.Infof("command is %s ", strings.Join(cmdStrs, " "))
 	reader := strings.NewReader(strings.Join(cmdStrs, " "))
-	output, stderr, err := kubeapi.ExecToPodThroughAPI(config, clientset, bashcmd, containername, PODNAME, Namespace, reader)
+	output, stderr, err := kubeapi.ExecToPodThroughAPI(client.Config, client, bashcmd, containername, PODNAME, Namespace, reader)
 	if err != nil {
 		log.Info("output=[" + output + "]")
 		log.Info("stderr=[" + stderr + "]")

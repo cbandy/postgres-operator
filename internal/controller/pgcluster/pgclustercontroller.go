@@ -27,23 +27,17 @@ import (
 	clusteroperator "github.com/crunchydata/postgres-operator/internal/operator/cluster"
 	"github.com/crunchydata/postgres-operator/internal/util"
 	crv1 "github.com/crunchydata/postgres-operator/pkg/apis/crunchydata.com/v1"
-	pgo "github.com/crunchydata/postgres-operator/pkg/generated/clientset/versioned"
 	informers "github.com/crunchydata/postgres-operator/pkg/generated/informers/externalversions/crunchydata.com/v1"
 
 	log "github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 )
 
 // Controller holds the connections for the controller
 type Controller struct {
-	PgclusterClient      *rest.RESTClient
-	PgclusterClientset   kubernetes.Interface
-	PgclusterConfig      *rest.Config
-	PGOClientset         pgo.Interface
+	Client               *kubeapi.Client
 	Queue                workqueue.RateLimitingInterface
 	Informer             informers.PgclusterInformer
 	PgclusterWorkerCount int
@@ -112,7 +106,7 @@ func (c *Controller) processNextItem() bool {
 	// Invoke the method containing the business logic
 	// in this case, the de-dupe logic is to test whether a cluster
 	// deployment exists , if so, then we don't create another
-	_, err := c.PgclusterClientset.AppsV1().Deployments(keyNamespace).Get(keyResourceName, metav1.GetOptions{})
+	_, err := c.Client.AppsV1().Deployments(keyNamespace).Get(keyResourceName, metav1.GetOptions{})
 
 	if err == nil {
 		log.Debugf("cluster add - dep already found, not creating again")
@@ -120,7 +114,7 @@ func (c *Controller) processNextItem() bool {
 	}
 
 	//get the pgcluster
-	cluster, err := c.PGOClientset.CrunchydataV1().Pgclusters(keyNamespace).Get(keyResourceName, metav1.GetOptions{})
+	cluster, err := c.Client.CrunchydataV1().Pgclusters(keyNamespace).Get(keyResourceName, metav1.GetOptions{})
 	if err != nil {
 		log.Debugf("cluster add - pgcluster not found, this is invalid")
 		return false
@@ -130,7 +124,7 @@ func (c *Controller) processNextItem() bool {
 
 	state := crv1.PgclusterStateProcessed
 	message := "Successfully processed Pgcluster by controller"
-	err = kubeapi.PatchpgclusterStatus(c.PgclusterClient, state, message, cluster, keyNamespace)
+	err = kubeapi.PatchpgclusterStatus(c.Client.Discovery().RESTClient(), state, message, cluster, keyNamespace)
 	if err != nil {
 		log.Errorf("ERROR updating pgcluster status on add: %s", err.Error())
 		return false
@@ -143,11 +137,11 @@ func (c *Controller) processNextItem() bool {
 	// ensures all deployments exist as needed to properly orchestrate initialization of the
 	// cluster, e.g. we need to ensure the primary DB deployment resource has been created before
 	// bringing the repo deployment online, since that in turn will bring the primary DB online.
-	clusteroperator.AddClusterBase(c.PgclusterClientset, c.PGOClientset, c.PgclusterClient, cluster, cluster.ObjectMeta.Namespace)
+	clusteroperator.AddClusterBase(c.Client, cluster, cluster.ObjectMeta.Namespace)
 
 	// Now scale the repo deployment only to ensure it is initialized prior to the primary DB.
 	// Once the repo is ready, the primary database deployment will then also be scaled to 1.
-	clusterInfo, err := clusteroperator.ScaleClusterDeployments(c.PgclusterClientset,
+	clusterInfo, err := clusteroperator.ScaleClusterDeployments(c.Client,
 		*cluster, 1, false, false, true, false)
 	if err != nil {
 		log.Error(err)
@@ -170,10 +164,10 @@ func (c *Controller) onUpdate(oldObj, newObj interface{}) {
 	// shutdown or started but its current status does not properly reflect that it is, then
 	// proceed with the logic needed to either shutdown or start the cluster
 	if newcluster.Spec.Shutdown && newcluster.Status.State != crv1.PgclusterStateShutdown {
-		clusteroperator.ShutdownCluster(c.PgclusterClientset, c.PGOClientset, c.PgclusterClient, *newcluster)
+		clusteroperator.ShutdownCluster(c.Client, *newcluster)
 	} else if !newcluster.Spec.Shutdown &&
 		newcluster.Status.State != crv1.PgclusterStateInitialized {
-		clusteroperator.StartupCluster(c.PgclusterClientset, *newcluster)
+		clusteroperator.StartupCluster(c.Client, *newcluster)
 	}
 
 	// check to see if the "autofail" label on the pgcluster CR has been changed from either true to false, or from
@@ -191,7 +185,7 @@ func (c *Controller) onUpdate(oldObj, newObj interface{}) {
 			return
 		}
 		if autofailEnabledNew != autofailEnabledOld {
-			util.ToggleAutoFailover(c.PgclusterClientset, autofailEnabledNew,
+			util.ToggleAutoFailover(c.Client, autofailEnabledNew,
 				newcluster.ObjectMeta.Labels[config.LABEL_PGHA_SCOPE],
 				newcluster.ObjectMeta.Namespace)
 		}
@@ -200,12 +194,12 @@ func (c *Controller) onUpdate(oldObj, newObj interface{}) {
 
 	// handle standby being enabled and disabled for the cluster
 	if oldcluster.Spec.Standby && !newcluster.Spec.Standby {
-		if err := clusteroperator.DisableStandby(c.PgclusterClientset, *newcluster); err != nil {
+		if err := clusteroperator.DisableStandby(c.Client, *newcluster); err != nil {
 			log.Error(err)
 			return
 		}
 	} else if !oldcluster.Spec.Standby && newcluster.Spec.Standby {
-		if err := clusteroperator.EnableStandby(c.PgclusterClientset, *newcluster); err != nil {
+		if err := clusteroperator.EnableStandby(c.Client, *newcluster); err != nil {
 			log.Error(err)
 			return
 		}
@@ -214,7 +208,7 @@ func (c *Controller) onUpdate(oldObj, newObj interface{}) {
 	// see if any of the resource values have changed, and if so, update them
 	if !reflect.DeepEqual(oldcluster.Spec.Resources, newcluster.Spec.Resources) ||
 		!reflect.DeepEqual(oldcluster.Spec.Limits, newcluster.Spec.Limits) {
-		if err := clusteroperator.UpdateResources(c.PgclusterClientset, c.PgclusterConfig, newcluster); err != nil {
+		if err := clusteroperator.UpdateResources(c.Client, c.Client.Config, newcluster); err != nil {
 			log.Error(err)
 			return
 		}
@@ -224,7 +218,7 @@ func (c *Controller) onUpdate(oldObj, newObj interface{}) {
 	// if so, update them
 	if !reflect.DeepEqual(oldcluster.Spec.BackrestResources, newcluster.Spec.BackrestResources) ||
 		!reflect.DeepEqual(oldcluster.Spec.BackrestLimits, newcluster.Spec.BackrestLimits) {
-		if err := backrestoperator.UpdateResources(c.PgclusterClientset, c.PgclusterConfig, newcluster); err != nil {
+		if err := backrestoperator.UpdateResources(c.Client, newcluster); err != nil {
 			log.Error(err)
 			return
 		}
@@ -293,15 +287,15 @@ func updatePgBouncer(c *Controller, oldCluster *crv1.Pgcluster, newCluster *crv1
 
 		// if this is being enabled, it's a simple step where we can return here
 		if newCluster.Spec.PgBouncer.Enabled() {
-			return clusteroperator.AddPgbouncer(c.PgclusterClientset, c.PgclusterClient, c.PgclusterConfig, newCluster)
+			return clusteroperator.AddPgbouncer(c.Client, c.Client.Config, newCluster)
 		}
 
 		// if we're not enabled, we're disabled
-		return clusteroperator.DeletePgbouncer(c.PgclusterClientset, c.PgclusterClient, c.PgclusterConfig, newCluster)
+		return clusteroperator.DeletePgbouncer(c.Client, c.Client.Config, newCluster)
 	}
 
 	// otherwise, this is an update
-	return clusteroperator.UpdatePgbouncer(c.PgclusterClientset, c.PgclusterClient, oldCluster, newCluster)
+	return clusteroperator.UpdatePgbouncer(c.Client, oldCluster, newCluster)
 }
 
 // updateTablespaces updates the PostgreSQL instance Deployments to reflect the
@@ -327,7 +321,7 @@ func updateTablespaces(c *Controller, oldCluster *crv1.Pgcluster, newCluster *cr
 
 	// alright, update the tablespace entries for this cluster!
 	// if it returns an error, pass the error back up to the caller
-	if err := clusteroperator.UpdateTablespaces(c.PgclusterClientset, c.PgclusterConfig, newCluster, newTablespaces); err != nil {
+	if err := clusteroperator.UpdateTablespaces(c.Client, c.Client.Config, newCluster, newTablespaces); err != nil {
 		return err
 	}
 

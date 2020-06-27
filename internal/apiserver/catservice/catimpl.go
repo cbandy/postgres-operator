@@ -46,7 +46,7 @@ func Cat(request *msgs.CatRequest, ns string) msgs.CatResponse {
 	}
 
 	clusterName := request.Args[0]
-	cluster, err := apiserver.PGOClientset.CrunchydataV1().Pgclusters(ns).Get(clusterName, metav1.GetOptions{})
+	cluster, err := apiserver.Clientset.CrunchydataV1().Pgclusters(ns).Get(clusterName, metav1.GetOptions{})
 	if err != nil {
 		resp.Status.Code = msgs.Error
 		resp.Status.Msg = clusterName + " was not found, verify cluster name"
@@ -86,7 +86,7 @@ func Cat(request *msgs.CatRequest, ns string) msgs.CatResponse {
 	log.Debugf("cat called for cluster %s", clusterName)
 
 	var results string
-	results, err = cat(&podList.Items[0], apiserver.Clientset, apiserver.RESTClient, apiserver.RESTConfig, ns, request.Args)
+	results, err = cat(&podList.Items[0], apiserver.Clientset, apiserver.RESTConfig, ns, request.Args)
 	if err != nil {
 		resp.Status.Code = msgs.Error
 		resp.Status.Msg = err.Error()
@@ -103,7 +103,7 @@ func Cat(request *msgs.CatRequest, ns string) msgs.CatResponse {
 func cat(
 	pod *v1.Pod,
 	clientset kubernetes.Interface,
-	client *rest.RESTClient, restconfig *rest.Config, ns string, args []string) (string, error) {
+	restconfig *rest.Config, ns string, args []string) (string, error) {
 
 	command := make([]string, 0)
 	command = append(command, "cat")

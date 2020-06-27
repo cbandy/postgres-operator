@@ -108,7 +108,7 @@ func getDBTags(ns string) map[string]int {
 func getNotReady(ns string) []string {
 	//show all database pods for each pgcluster that are not yet running
 	agg := make([]string, 0)
-	clusterList, err := apiserver.PGOClientset.CrunchydataV1().Pgclusters(ns).List(metav1.ListOptions{})
+	clusterList, err := apiserver.Clientset.CrunchydataV1().Pgclusters(ns).List(metav1.ListOptions{})
 	if err != nil {
 		clusterList = &crv1.PgclusterList{}
 	}

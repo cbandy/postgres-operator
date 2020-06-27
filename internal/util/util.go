@@ -58,7 +58,7 @@ type ThingSpec struct {
 }
 
 // Patch will patch a particular resource
-func Patch(restclient *rest.RESTClient, path string, value string, resource string, name string, namespace string) error {
+func Patch(restclient rest.Interface, path string, value string, resource string, name string, namespace string) error {
 	things := make([]ThingSpec, 1)
 	things[0].Op = "replace"
 	things[0].Path = path

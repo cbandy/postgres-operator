@@ -31,7 +31,6 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/kubeapi"
 	"github.com/crunchydata/postgres-operator/internal/ns"
 	"github.com/crunchydata/postgres-operator/internal/tlsutil"
-	pgov1 "github.com/crunchydata/postgres-operator/pkg/generated/clientset/versioned"
 	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,14 +45,10 @@ const PGOSecretName = "pgo.tls"
 const VERSION_MISMATCH_ERROR = "pgo client and server version mismatch"
 
 var (
-	// PGOClientset is a client for PostgreSQL Operator resources
-	PGOClientset pgov1.Interface
-	// Clientset is a client for native Kubernetes resources
-	Clientset kubernetes.Interface
+	// Clientset is a client for Kubernetes resources
+	Clientset kubeapi.Interface
 	// RESTConfig holds the REST configuration for a Kube client
 	RESTConfig *rest.Config
-	// RESTClient is a REST client for the Kubernetes API
-	RESTClient *rest.RESTClient
 )
 
 // MetricsFlag if set to true will cause crunchy-collect to be added into new clusters
@@ -157,15 +152,13 @@ func Initialize() {
 func ConnectToKube() {
 
 	var err error
-	controllerClients, err := kubeapi.NewControllerClients()
+	client, err := kubeapi.NewClient()
 	if err != nil {
 		panic(err)
 	}
 
-	RESTConfig = controllerClients.Config
-	RESTClient = controllerClients.PGORestclient
-	Clientset = controllerClients.Kubeclientset
-	PGOClientset = controllerClients.PGOClientset
+	Clientset = client
+	RESTConfig = client.Config
 }
 
 func initConfig() {
