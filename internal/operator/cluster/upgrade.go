@@ -402,16 +402,12 @@ func createUpgradePGHAConfigMap(clientset kubernetes.Interface, cluster *crv1.Pg
 // recreateBackrestRepoSecret deletes and recreates the secret for the pgBackRest repo. This is needed
 // because the key encryption algorithm has been updated from RSA to EdDSA
 func recreateBackrestRepoSecret(clientset kubernetes.Interface, clustername, namespace, operatorNamespace string) {
-	secretName := clustername + "-backrest-repo-config"
-	secret, err := clientset.CoreV1().Secrets(namespace).Get(secretName, metav1.GetOptions{})
-	if err == nil {
-		err = clientset.CoreV1().Secrets(namespace).Delete(secretName, &metav1.DeleteOptions{})
-	}
+	credentials, err := util.GetS3CredsFromBackrestRepoSecret(clientset, namespace, clustername)
 	if err == nil {
 		err = util.CreateBackrestRepoSecrets(clientset, util.BackrestRepoConfig{
-			BackrestS3CA:        secret.Data[util.BackRestRepoSecretKeyAWSS3KeyAWSS3CACert],
-			BackrestS3Key:       string(secret.Data[util.BackRestRepoSecretKeyAWSS3KeyAWSS3Key]),
-			BackrestS3KeySecret: string(secret.Data[util.BackRestRepoSecretKeyAWSS3KeyAWSS3KeySecret]),
+			BackrestS3CA:        credentials.AWSS3CA,
+			BackrestS3Key:       credentials.AWSS3Key,
+			BackrestS3KeySecret: credentials.AWSS3KeySecret,
 			ClusterName:         clustername,
 			ClusterNamespace:    namespace,
 			OperatorNamespace:   operatorNamespace,

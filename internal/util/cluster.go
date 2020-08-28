@@ -175,7 +175,7 @@ func CreateBackrestRepoSecrets(clientset kubernetes.Interface,
 		},
 	}
 
-	_, err = clientset.CoreV1().Secrets(backrestRepoConfig.ClusterNamespace).Create(&secret)
+	_, err = clientset.CoreV1().Secrets(backrestRepoConfig.ClusterNamespace).Update(&secret)
 	return err
 }
 
