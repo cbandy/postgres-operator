@@ -310,9 +310,6 @@ func deleteBeforeUpgrade(clientset kubeapi.Interface, clusterName, currentPrimar
 	// delete the '<cluster-name>-pgha-default-config' configmap, if it exists so the config syncer
 	// will not try to use it instead of '<cluster-name>-pgha-config'
 	clientset.CoreV1().ConfigMaps(namespace).Delete(clusterName+"-pgha-default-config", &metav1.DeleteOptions{})
-
-	// delete the backrest repo config secret, since key encryption has been updated from RSA to EdDSA
-	clientset.CoreV1().Secrets(namespace).Delete(clusterName+"-backrest-repo-config", &metav1.DeleteOptions{})
 }
 
 // deploymentWait is modified from cluster.waitForDeploymentDelete. It simply waits for the current primary deployment
@@ -405,14 +402,22 @@ func createUpgradePGHAConfigMap(clientset kubernetes.Interface, cluster *crv1.Pg
 // recreateBackrestRepoSecret deletes and recreates the secret for the pgBackRest repo. This is needed
 // because the key encryption algorithm has been updated from RSA to EdDSA
 func recreateBackrestRepoSecret(clientset kubernetes.Interface, clustername, namespace, operatorNamespace string) {
-	if err := util.CreateBackrestRepoSecrets(clientset,
-		util.BackrestRepoConfig{
-			BackrestS3Key:       "", // these are set to empty so that it can be generated
-			BackrestS3KeySecret: "",
+	secretName := clustername + "-backrest-repo-config"
+	secret, err := clientset.CoreV1().Secrets(namespace).Get(secretName, metav1.GetOptions{})
+	if err == nil {
+		err = clientset.CoreV1().Secrets(namespace).Delete(secretName, &metav1.DeleteOptions{})
+	}
+	if err == nil {
+		err = util.CreateBackrestRepoSecrets(clientset, util.BackrestRepoConfig{
+			BackrestS3CA:        secret.Data[util.BackRestRepoSecretKeyAWSS3KeyAWSS3CACert],
+			BackrestS3Key:       string(secret.Data[util.BackRestRepoSecretKeyAWSS3KeyAWSS3Key]),
+			BackrestS3KeySecret: string(secret.Data[util.BackRestRepoSecretKeyAWSS3KeyAWSS3KeySecret]),
 			ClusterName:         clustername,
 			ClusterNamespace:    namespace,
 			OperatorNamespace:   operatorNamespace,
-		}); err != nil {
+		})
+	}
+	if err != nil {
 		log.Errorf("error generating new backrest repo secrets during pgcluster upgrade: %v", err)
 	}
 }
