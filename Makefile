@@ -68,14 +68,28 @@ ifeq ("$(PGO_BASEOS)", "centos8")
         DOCKERBASEREGISTRY=centos:
 endif
 
-DEBUG_BUILD ?= false
+CONTAINER ?= ## Executable used to build in containers, e.g. "podman".
+
+GO ?= go
 GO_BUILD = $(GO_CMD) build
-GO_CMD = $(GO_ENV) go
+GO_CMD = $(GO_ENV) $(GO)
+GO_IMAGE ?= registry.access.redhat.com/ubi8/go-toolset:latest
 
 # Disable optimizations if creating a debug build
 ifeq ("$(DEBUG_BUILD)", "true")
 	GO_BUILD += -gcflags='all=-N -l'
 endif
+
+ifeq (podman,$(findstring podman,$(CONTAINER)))
+GO_CONTAINER_ARGS += --userns 'keep-id'
+endif
+
+ifneq ($(CONTAINER),)
+GO_CMD = $(CONTAINER) run --rm --user "$$(id -u)" \
+	--env 'GOCACHE=/tmp/go-build' --env 'GOPATH=/tmp/go-path' \
+	--volume '$(CURDIR):/mnt:delegated' --workdir '/mnt' \
+	$(GO_CONTAINER_ARGS) $(GO_IMAGE) env $(GO_ENV) go
+endif # $(CONTAINER)
 
 # To build a specific image, run 'make <name>-image' (e.g. 'make pgo-apiserver-image')
 images = pgo-apiserver \
