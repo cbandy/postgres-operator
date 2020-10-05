@@ -15,33 +15,8 @@ PACKAGER ?= yum
 RELTMPDIR=/tmp/release.$(PGO_VERSION)
 RELFILE=/tmp/postgres-operator.$(PGO_VERSION).tar.gz
 
-ifneq ($(IMGBUILDER),)
-$(warning WARNING: IMGBUILDER is deprecated; images are always built with buildah)
-ifeq ($(IMGBUILDER),docker)
-$(warning WARNING: set CONTAINER=docker to build images by running docker containers)
-CONTAINER ?= docker
-endif
-endif
-
 # The utility to use when pushing/pulling to and from an image repo (e.g. docker or buildah)
 IMG_PUSHER_PULLER ?= docker
-
-ifneq ($(IMG_PUSH_TO_DOCKER_DAEMON),)
-$(warning WARNING: IMG_PUSH_TO_DOCKER_DAEMON is deprecated)
-ifeq ("$(IMG_PUSH_TO_DOCKER_DAEMON)", "true")
-$(warning WARNING: set BUILDAH_TRANSPORT=docker-daemon: to push images as they are built)
-BUILDAH_TRANSPORT ?= docker-daemon:
-endif
-endif
-
-ifneq ($(IMG_ROOTLESS_BUILD),)
-$(warning WARNING: IMG_ROOTLESS_BUILD is deprecated; images are rootless by default)
-ifneq ("$(IMG_ROOTLESS_BUILD)", "true")
-$(warning WARNING: set BUILDAH_SUDO=sudo to build images as root)
-BUILDAH_SUDO ?= sudo
-endif
-endif
-
 
 DFSET=$(PGO_BASEOS)
 DOCKERBASEREGISTRY=registry.access.redhat.com/
@@ -176,24 +151,6 @@ winpgo:
 DOCKERFILES = $(wildcard build/*/Dockerfile)
 IMAGES = $(DOCKERFILES:build/%/Dockerfile=image-%)
 OTHER_IMAGES = $(filter-out image-pgo-base,$(IMAGES))
-
-ifndef IMG_PUSH_TO_DOCKER_DAEMON
-ifeq ($(BUILDAH_TRANSPORT),)
-$(IMAGES): --docker-push-notification
---docker-push-notification:
-	$(warning INFO: images are no longer pushed to the local Docker daemon by default)
-	$(warning INFO: set CONTAINER=docker or BUILDAH_TRANSPORT=docker-daemon: to push images as they are built)
-endif
-endif
-
-ifndef IMG_ROOTLESS_BUILD
-ifeq ($(BUILDAH_SUDO),)
-$(IMAGES): --rootless-notification
---rootless-notification:
-	$(warning INFO: images are now built by the current user rather than root)
-	$(warning INFO: set BUILDAH_SUDO=sudo to build images as root)
-endif
-endif
 
 .PHONY: all-images $(IMAGES) $(IMAGES:image-%=build-%)
 all-images: $(IMAGES) ;
