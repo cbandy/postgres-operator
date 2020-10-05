@@ -1,3 +1,4 @@
+.SUFFIXES:
 
 # Default values if not already set
 ANSIBLE_VERSION ?= 2.9.*
@@ -14,34 +15,37 @@ PACKAGER ?= yum
 RELTMPDIR=/tmp/release.$(PGO_VERSION)
 RELFILE=/tmp/postgres-operator.$(PGO_VERSION).tar.gz
 
-# Valid values: buildah (default), docker
-IMGBUILDER ?= buildah
-# Determines whether or not rootless builds are enabled
-IMG_ROOTLESS_BUILD ?= false
+ifneq ($(IMGBUILDER),)
+$(warning WARNING: IMGBUILDER is deprecated; images are always built with buildah)
+ifeq ($(IMGBUILDER),docker)
+$(warning WARNING: set CONTAINER=docker to build images by running docker containers)
+CONTAINER ?= docker
+endif
+endif
+
 # The utility to use when pushing/pulling to and from an image repo (e.g. docker or buildah)
 IMG_PUSHER_PULLER ?= docker
-# Determines whether or not images should be pushed to the local docker daemon when building with
-# a tool other than docker (e.g. when building with buildah)
-IMG_PUSH_TO_DOCKER_DAEMON ?= true
-# Defines the sudo command that should be prepended to various build commands when rootless builds are
-# not enabled
-IMGCMDSUDO=
-ifneq ("$(IMG_ROOTLESS_BUILD)", "true")
-	IMGCMDSUDO=sudo --preserve-env
+
+ifneq ($(IMG_PUSH_TO_DOCKER_DAEMON),)
+$(warning WARNING: IMG_PUSH_TO_DOCKER_DAEMON is deprecated)
+ifeq ("$(IMG_PUSH_TO_DOCKER_DAEMON)", "true")
+$(warning WARNING: set BUILDAH_TRANSPORT=docker-daemon: to push images as they are built)
+BUILDAH_TRANSPORT ?= docker-daemon:
 endif
-IMGCMDSTEM=$(IMGCMDSUDO) buildah bud --layers $(SQUASH)
+endif
+
+ifneq ($(IMG_ROOTLESS_BUILD),)
+$(warning WARNING: IMG_ROOTLESS_BUILD is deprecated; images are rootless by default)
+ifneq ("$(IMG_ROOTLESS_BUILD)", "true")
+$(warning WARNING: set BUILDAH_SUDO=sudo to build images as root)
+BUILDAH_SUDO ?= sudo
+endif
+endif
+
+
 DFSET=$(PGO_BASEOS)
-
-# Default the buildah format to docker to ensure it is possible to pull the images from a docker
-# repository using docker (otherwise the images may not be recognized)
-export BUILDAH_FORMAT ?= docker
-
 DOCKERBASEREGISTRY=registry.access.redhat.com/
 
-# Allows simplification of IMGBUILDER switching
-ifeq ("$(IMGBUILDER)","docker")
-        IMGCMDSTEM=docker build
-endif
 
 # Allows consolidation of ubi/rhel/centos Dockerfile sets
 ifeq ("$(PGO_BASEOS)", "rhel7")
@@ -68,6 +72,12 @@ ifeq ("$(PGO_BASEOS)", "centos8")
         DOCKERBASEREGISTRY=centos:
 endif
 
+BUILDAH_BUILD_ARGS ?= ## Extra arguments passed to `buildah build-using-dockerfile`.
+BUILDAH_CMD = $(BUILDAH_SUDO) buildah
+BUILDAH_IMAGE ?= quay.io/buildah/stable:latest
+BUILDAH_SUDO ?= ## Set to "sudo" to disable rootless image builds.
+BUILDAH_TRANSPORT ?= ## Set to a Buildah transport to push images as they are built. See buildah-push(1).
+
 CONTAINER ?= ## Executable used to build in containers, e.g. "podman".
 
 GO ?= go
@@ -80,36 +90,38 @@ ifeq ("$(DEBUG_BUILD)", "true")
 	GO_BUILD += -gcflags='all=-N -l'
 endif
 
+ifeq (docker,$(findstring docker,$(CONTAINER)))
+BUILDAH_CONTAINER_ARGS += --volume '/var/run/docker.sock:/var/run/docker.sock'
+$(eval BUILDAH_TRANSPORT = $(or $(value BUILDAH_TRANSPORT),docker-daemon:))
+endif
+
 ifeq (podman,$(findstring podman,$(CONTAINER)))
+# Run containerized Buildah with the same storage driver as this user.
+BUILDAH_ARGS += $(if $(BUILDAH_SUDO),,--storage-driver $(shell buildah info --format '{{.store.GraphDriverName}}'))
+BUILDAH_CONTAINER_ARGS += --volume '$(BUILDAH_STORAGE):/var/lib/containers/storage'
+BUILDAH_STORAGE ?= $(shell $(BUILDAH_SUDO) buildah info --format '{{.store.GraphRoot}}')
 GO_CONTAINER_ARGS += --userns 'keep-id'
 endif
 
 ifneq ($(CONTAINER),)
+BUILDAH_CMD = $(BUILDAH_SUDO) $(CONTAINER) run --rm \
+	--device '/dev/fuse:rw' --network 'host' --security-opt 'seccomp=unconfined' \
+	--volume '$(CURDIR):/mnt:delegated' --workdir '/mnt' \
+	$(BUILDAH_CONTAINER_ARGS) $(BUILDAH_IMAGE) buildah $(BUILDAH_ARGS)
+
 GO_CMD = $(CONTAINER) run --rm --user "$$(id -u)" \
 	--env 'GOCACHE=/tmp/go-build' --env 'GOPATH=/tmp/go-path' \
 	--volume '$(CURDIR):/mnt:delegated' --workdir '/mnt' \
 	$(GO_CONTAINER_ARGS) $(GO_IMAGE) env $(GO_ENV) go
 endif # $(CONTAINER)
 
-# To build a specific image, run 'make <name>-image' (e.g. 'make pgo-apiserver-image')
-images = pgo-apiserver \
-	pgo-backrest \
-	pgo-backrest-repo \
-	pgo-event \
-	pgo-rmdata \
-	pgo-scheduler \
-	pgo-sqlrunner \
-	pgo-client \
-	pgo-deployer \
-	crunchy-postgres-exporter \
-	postgres-operator
 
 .PHONY: all installrbac setup setupnamespaces cleannamespaces \
 	deployoperator cli-docs clean push pull release
 
 
 #======= Main functions =======
-all: linuxpgo $(images:%=%-image)
+all: linuxpgo all-images
 
 installrbac:
 	PGOROOT='$(PGOROOT)' ./deploy/install-rbac.sh
@@ -147,12 +159,6 @@ build-postgres-operator:
 build-pgo-client:
 	$(GO_BUILD) -o bin/pgo ./cmd/pgo
 
-build-pgo-%:
-	$(info No binary build needed for $@)
-
-build-crunchy-postgres-exporter:
-	$(info No binary build needed for $@)
-
 linuxpgo: GO_ENV += GOOS=linux GOARCH=amd64
 linuxpgo:
 	$(GO_BUILD) -o bin/pgo ./cmd/pgo
@@ -167,55 +173,54 @@ winpgo:
 
 
 #======= Image builds =======
-$(PGOROOT)/build/%/Dockerfile:
-	$(error No Dockerfile found for $* naming pattern: [$@])
+DOCKERFILES = $(wildcard build/*/Dockerfile)
+IMAGES = $(DOCKERFILES:build/%/Dockerfile=image-%)
+OTHER_IMAGES = $(filter-out image-pgo-base,$(IMAGES))
 
-%-img-build: pgo-base-$(IMGBUILDER) build-% $(PGOROOT)/build/%/Dockerfile
-	$(IMGCMDSTEM) \
-		-f $(PGOROOT)/build/$*/Dockerfile \
-		-t $(PGO_IMAGE_PREFIX)/$*:$(PGO_IMAGE_TAG) \
-		--build-arg BASEOS=$(PGO_BASEOS) \
-		--build-arg BASEVER=$(PGO_VERSION) \
-		--build-arg PREFIX=$(PGO_IMAGE_PREFIX) \
-		--build-arg PGVERSION=$(PGO_PG_VERSION) \
-		--build-arg BACKREST_VERSION=$(PGO_BACKREST_VERSION) \
-		--build-arg ANSIBLE_VERSION=$(ANSIBLE_VERSION) \
-		--build-arg DFSET=$(DFSET) \
-		--build-arg PACKAGER=$(PACKAGER) \
-		$(PGOROOT)
-
-%-img-buildah: %-img-build ;
-# only push to docker daemon if variable PGO_PUSH_TO_DOCKER_DAEMON is set to "true"
-ifeq ("$(IMG_PUSH_TO_DOCKER_DAEMON)", "true")
-	$(IMGCMDSUDO) buildah push $(PGO_IMAGE_PREFIX)/$*:$(PGO_IMAGE_TAG) docker-daemon:$(PGO_IMAGE_PREFIX)/$*:$(PGO_IMAGE_TAG)
+ifndef IMG_PUSH_TO_DOCKER_DAEMON
+ifeq ($(BUILDAH_TRANSPORT),)
+$(IMAGES): --docker-push-notification
+--docker-push-notification:
+	$(warning INFO: images are no longer pushed to the local Docker daemon by default)
+	$(warning INFO: set CONTAINER=docker or BUILDAH_TRANSPORT=docker-daemon: to push images as they are built)
+endif
 endif
 
-%-img-docker: %-img-build ;
-
-%-image: %-img-$(IMGBUILDER) ;
-
-pgo-base: pgo-base-$(IMGBUILDER)
-
-pgo-base-build: $(PGOROOT)/build/pgo-base/Dockerfile
-	$(IMGCMDSTEM) \
-		-f $(PGOROOT)/build/pgo-base/Dockerfile \
-		-t $(PGO_IMAGE_PREFIX)/pgo-base:$(PGO_IMAGE_TAG) \
-		--build-arg BASEOS=$(PGO_BASEOS) \
-		--build-arg RELVER=$(PGO_VERSION) \
-		--build-arg PGVERSION=$(PGO_PG_VERSION) \
-		--build-arg PG_FULL=$(PGO_PG_FULLVERSION) \
-		--build-arg DFSET=$(DFSET) \
-		--build-arg PACKAGER=$(PACKAGER) \
-		--build-arg DOCKERBASEREGISTRY=$(DOCKERBASEREGISTRY) \
-		$(PGOROOT)
-
-pgo-base-buildah: pgo-base-build ;
-# only push to docker daemon if variable PGO_PUSH_TO_DOCKER_DAEMON is set to "true"
-ifeq ("$(IMG_PUSH_TO_DOCKER_DAEMON)", "true")
-	$(IMGCMDSUDO) buildah push $(PGO_IMAGE_PREFIX)/pgo-base:$(PGO_IMAGE_TAG) docker-daemon:$(PGO_IMAGE_PREFIX)/pgo-base:$(PGO_IMAGE_TAG)
+ifndef IMG_ROOTLESS_BUILD
+ifeq ($(BUILDAH_SUDO),)
+$(IMAGES): --rootless-notification
+--rootless-notification:
+	$(warning INFO: images are now built by the current user rather than root)
+	$(warning INFO: set BUILDAH_SUDO=sudo to build images as root)
+endif
 endif
 
-pgo-base-docker: pgo-base-build
+.PHONY: all-images $(IMAGES) $(IMAGES:image-%=build-%)
+all-images: $(IMAGES) ;
+
+image-pgo-base: build/pgo-base/Dockerfile
+	$(BUILDAH_CMD) build-using-dockerfile \
+		--tag $(BUILDAH_TRANSPORT)$(PGO_IMAGE_PREFIX)/pgo-base:$(PGO_IMAGE_TAG) \
+		--build-arg 'BASEOS=$(PGO_BASEOS)' \
+		--build-arg 'DOCKERBASEREGISTRY=$(DOCKERBASEREGISTRY)' \
+		--build-arg 'PACKAGER=$(PACKAGER)' \
+		--build-arg 'PG_FULL=$(PGO_PG_FULLVERSION)' \
+		--build-arg 'PGVERSION=$(PGO_PG_VERSION)' \
+		--build-arg 'RELVER=$(PGO_VERSION)' \
+		--file $< --format docker --layers $(BUILDAH_BUILD_ARGS) .
+
+$(OTHER_IMAGES): image-%: build/%/Dockerfile build-% image-pgo-base
+	$(BUILDAH_CMD) build-using-dockerfile \
+		--tag $(BUILDAH_TRANSPORT)$(PGO_IMAGE_PREFIX)/$*:$(PGO_IMAGE_TAG) \
+		--build-arg 'ANSIBLE_VERSION=$(ANSIBLE_VERSION)' \
+		--build-arg 'BACKREST_VERSION=$(PGO_BACKREST_VERSION)' \
+		--build-arg 'BASEOS=$(PGO_BASEOS)' \
+		--build-arg 'BASEVER=$(PGO_VERSION)' \
+		--build-arg 'DFSET=$(DFSET)' \
+		--build-arg 'PACKAGER=$(PACKAGER)' \
+		--build-arg 'PGVERSION=$(PGO_PG_VERSION)' \
+		--build-arg 'PREFIX=$(BUILDAH_TRANSPORT)$(PGO_IMAGE_PREFIX)' \
+		--file $< --format docker --layers $(BUILDAH_BUILD_ARGS) .
 
 
 #======== Utility =======
@@ -243,13 +248,11 @@ clean-deprecated:
 	[ ! -n '$(GOBIN)' ] || rm -f $(GOBIN)/postgres-operator $(GOBIN)/apiserver $(GOBIN)/*pgo
 	[ ! -d bin/postgres-operator ] || rm -r bin/postgres-operator
 
-push: $(images:%=push-%) ;
-
+push: $(IMAGES:image-%=push-%) ;
 push-%:
 	$(IMG_PUSHER_PULLER) push $(PGO_IMAGE_PREFIX)/$*:$(PGO_IMAGE_TAG)
 
-pull: $(images:%=pull-%) ;
-
+pull: $(IMAGES:image-%=pull-%) ;
 pull-%:
 	$(IMG_PUSHER_PULLER) pull $(PGO_IMAGE_PREFIX)/$*:$(PGO_IMAGE_TAG)
 
