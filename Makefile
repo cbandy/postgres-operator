@@ -1,3 +1,4 @@
+.DEFAULT_GOAL := help
 .SUFFIXES:
 
 # Default values if not already set
@@ -49,16 +50,16 @@ endif
 
 BUILDAH_BUILD_ARGS ?= ## Extra arguments passed to `buildah build-using-dockerfile`.
 BUILDAH_CMD = $(BUILDAH_SUDO) buildah
-BUILDAH_IMAGE ?= quay.io/buildah/stable:latest
+BUILDAH_IMAGE ?= quay.io/buildah/stable:latest ## Buildah image to use when building in containers.
 BUILDAH_SUDO ?= ## Set to "sudo" to disable rootless image builds.
 BUILDAH_TRANSPORT ?= ## Set to a Buildah transport to push images as they are built. See buildah-push(1).
 
 CONTAINER ?= ## Executable used to build in containers, e.g. "podman".
 
-GO ?= go
+GO ?= go ## Go executable.
 GO_BUILD = $(GO_CMD) build
 GO_CMD = $(GO_ENV) $(GO)
-GO_IMAGE ?= registry.access.redhat.com/ubi8/go-toolset:latest
+GO_IMAGE ?= registry.access.redhat.com/ubi8/go-toolset:latest ## Go image to use when building in containers.
 
 # Disable optimizations if creating a debug build
 ifeq ("$(DEBUG_BUILD)", "true")
@@ -94,6 +95,20 @@ endif # $(CONTAINER)
 .PHONY: all installrbac setup setupnamespaces cleannamespaces \
 	deployoperator cli-docs clean push pull release
 
+.PHONY: help
+help: ALIGN=20
+help: ## Print this message.
+	@echo Targets:
+	@awk -F ': ## ' -- "/^[^':]+: ## /"' { \
+		printf "'$$(tput bold)'%-$(ALIGN)s'$$(tput sgr0)' %s\n", $$1, $$2; \
+	}' $(MAKEFILE_LIST)
+	@echo
+	@echo Variables:
+	@awk -F ' [?]= ' -- '/^[^ ]+ [?]= .*## / { \
+		split($$2,a,"## "); sub(" +$$","",a[1]); \
+		printf "'$$(tput bold)'%-$(ALIGN)s'$$(tput sgr0)' %s", $$1, a[2]; \
+		if (a[1]) printf " (default: %s)", a[1]; printf "\n"; \
+	}' $(MAKEFILE_LIST)
 
 #======= Main functions =======
 all: linuxpgo all-images
@@ -154,6 +169,7 @@ OTHER_IMAGES = $(filter-out image-pgo-base,$(IMAGES))
 
 .PHONY: all-images $(IMAGES) $(IMAGES:image-%=build-%)
 all-images: $(IMAGES) ;
+all-images: ## Build all container images using Buildah.
 
 image-pgo-base: build/pgo-base/Dockerfile
 	$(BUILDAH_CMD) build-using-dockerfile \
