@@ -16,9 +16,12 @@ jobs:
 
   hadolint:
     runs-on: ubuntu-latest
+    container: docker.io/hadolint/hadolint
     steps:
       - uses: actions/checkout@v2
-      - uses: docker://docker.io/hadolint/hadolint
-        with:
-          args: hadolint build/*/Dockerfile
+      #- run: hadolint build/*/Dockerfile | sed -e 's|^\([^:]*\):\([^ ]*\) |::error file=\1,line=\2::|'
+      - run: >
+          tmpfile=$(mktemp);
+          if hadolint build/*/Dockerfile > $tmpfile; then cat $tmpfile;
+          else rc=$?; sed -e 's|^\([^:]*\):\([^ ]*\) |::error file=\1,line=\2::|' $tmpfile; exit $rc; fi
 
