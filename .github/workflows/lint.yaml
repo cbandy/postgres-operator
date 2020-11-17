@@ -19,5 +19,9 @@ jobs:
     container: docker.io/hadolint/hadolint
     steps:
       - uses: actions/checkout@v2
-      - run: hadolint build/*/Dockerfile | sed -e 's|^\([^:]*\):\([^ ]*\) |::error file=\1,line=\2::|'
+      - run: >
+          tmpdir=$(mktemp -d);
+          mkfifo $tmpdir/pipe &&
+          sed  < $tmpdir/pipe -e 's|^\([^:]*\):\([^ ]*\) |::error file=\1,line=\2::|' &
+          hadolint > $tmpdir/pipe build/*/Dockerfile
 
