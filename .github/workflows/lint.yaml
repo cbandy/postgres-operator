@@ -19,5 +19,5 @@ jobs:
     container: docker.io/hadolint/hadolint
     steps:
       - uses: actions/checkout@v2
-      - run: hadolint ./build/*/Dockerfile
+      - run: hadolint build/*/Dockerfile | sed -e 's|^\([^:]*\):\([^ ]*\) |::error file=\1,line=\2::|'
 
