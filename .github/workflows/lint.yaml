@@ -16,12 +16,9 @@ jobs:
 
   hadolint:
     runs-on: ubuntu-latest
-    container: docker.io/hadolint/hadolint
     steps:
       - uses: actions/checkout@v2
-      - run: >
-          tmpdir=$(mktemp -d);
-          mkfifo $tmpdir/pipe &&
-          sed  < $tmpdir/pipe -e 's|^\([^:]*\):\([^ ]*\) |::error file=\1,line=\2::|' &
-          hadolint > $tmpdir/pipe build/*/Dockerfile
+      - uses: docker://docker.io/hadolint/hadolint
+        with:
+          args: hadolint build/*/Dockerfile | sed -e 's|^\([^:]*\):\([^ ]*\) |::error file=\1,line=\2::|'
 
