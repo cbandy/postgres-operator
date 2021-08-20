@@ -48,4 +48,5 @@ jobs:
         with:
           version: "${{ matrix.kubernetes }}"
           k3d-args: --no-lb
-      - run: make createnamespaces check-envtest-existing
+      - env: { PGO_TEST_TIMEOUT_SCALE: 1.2 }
+        run: make createnamespaces check-envtest-existing
