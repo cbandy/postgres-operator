@@ -171,47 +171,49 @@ func TestServerSideApply(t *testing.T) {
 
 		reconciler := Reconciler{Client: cc, Owner: client.FieldOwner(t.Name())}
 
-		// Start with fields filled out.
-		intent := constructor("change-to-zero")
-		intent.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{
-			SupplementalGroups: []int64{1, 2, 3},
-		}
+		t.Run("change-to-zero", func(t *testing.T) {
+			// Start with fields filled out.
+			intent := constructor("change-to-zero")
+			intent.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{
+				SupplementalGroups: []int64{1, 2, 3},
+			}
 
-		// Create the StatefulSet.
-		before := intent.DeepCopy()
-		assert.NilError(t,
-			cc.Patch(ctx, before, client.Apply, client.ForceOwnership, reconciler.Owner))
+			// Create the StatefulSet.
+			before := intent.DeepCopy()
+			assert.NilError(t,
+				cc.Patch(ctx, before, client.Apply, client.ForceOwnership, reconciler.Owner))
 
-		// Change fields to zero.
-		intent.Spec.Template.Spec.SecurityContext.SupplementalGroups = nil
+			// Change fields to zero.
+			intent.Spec.Template.Spec.SecurityContext.SupplementalGroups = nil
 
-		// client.Apply cannot correct it in old versions of Kubernetes.
-		after := intent.DeepCopy()
-		assert.NilError(t,
-			cc.Patch(ctx, after, client.Apply, client.ForceOwnership, reconciler.Owner))
+			// client.Apply cannot correct it in old versions of Kubernetes.
+			after := intent.DeepCopy()
+			assert.NilError(t,
+				cc.Patch(ctx, after, client.Apply, client.ForceOwnership, reconciler.Owner))
 
-		switch {
-		case serverVersion.LessThan(version.MustParseGeneric("1.18.19")):
+			switch {
+			case serverVersion.LessThan(version.MustParseGeneric("1.18.19")):
 
-			// - https://pr.k8s.io/101179
-			assert.Assert(t, !equality.Semantic.DeepEqual(
-				after.Spec.Template.Spec.SecurityContext,
-				intent.Spec.Template.Spec.SecurityContext),
-				"expected https://issue.k8s.io/89273, got %v",
-				after.Spec.Template.Spec.SecurityContext)
+				// - https://pr.k8s.io/101179
+				assert.Assert(t, !equality.Semantic.DeepEqual(
+					after.Spec.Template.Spec.SecurityContext,
+					intent.Spec.Template.Spec.SecurityContext),
+					"expected https://issue.k8s.io/89273, got %v",
+					after.Spec.Template.Spec.SecurityContext)
 
-		default:
+			default:
+				assert.DeepEqual(t,
+					after.Spec.Template.Spec.SecurityContext,
+					intent.Spec.Template.Spec.SecurityContext)
+			}
+
+			// Our apply method corrects it.
+			again := intent.DeepCopy()
+			assert.NilError(t, reconciler.apply(ctx, again))
 			assert.DeepEqual(t,
-				after.Spec.Template.Spec.SecurityContext,
+				again.Spec.Template.Spec.SecurityContext,
 				intent.Spec.Template.Spec.SecurityContext)
-		}
-
-		// Our apply method corrects it.
-		again := intent.DeepCopy()
-		assert.NilError(t, reconciler.apply(ctx, again))
-		assert.DeepEqual(t,
-			again.Spec.Template.Spec.SecurityContext,
-			intent.Spec.Template.Spec.SecurityContext)
+		})
 	})
 
 	t.Run("ServiceSelector", func(t *testing.T) {
@@ -356,7 +358,7 @@ func TestServerSideApply(t *testing.T) {
 		intent := constructor("change-to-zero")
 		intent.Spec.ExternalIPs = []string{"10.9.8.7", "192.0.2.10"}
 
-		// Create the StatefulSet.
+		// Create the Service.
 		before := intent.DeepCopy()
 		assert.NilError(t,
 			cc.Patch(ctx, before, client.Apply, client.ForceOwnership, reconciler.Owner))
