@@ -160,6 +160,17 @@ func applyPodTemplateSpec(
 		actual.Spec.SecurityContext,
 		intent.Spec.SecurityContext,
 		append(path, "spec", "securityContext")...)
+
+	{
+		correct := len(actual.Spec.InitContainers) == len(intent.Spec.InitContainers)
+		for i := range actual.Spec.InitContainers {
+			correct = correct &&
+				actual.Spec.InitContainers[i].Name == intent.Spec.InitContainers[i].Name
+		}
+		if !correct {
+			patch.Replace(append(path, "spec", "initContainers")...)(intent.Spec.InitContainers)
+		}
+	}
 }
 
 // applyServiceSpec is called by Reconciler.apply to work around issues

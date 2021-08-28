@@ -20,6 +20,7 @@ package postgrescluster
 import (
 	"context"
 	"errors"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -35,10 +36,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
+
+// fnRoundTripper implements http.RoundTripper.
+type fnRoundTripper func(*http.Request) (*http.Response, error)
+
+func (fn fnRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+var _ http.RoundTripper = fnRoundTripper(nil)
 
 func TestServerSideApply(t *testing.T) {
 	// TODO: Update tests that include envtest package to better handle
@@ -169,7 +180,24 @@ func TestServerSideApply(t *testing.T) {
 			return &sts
 		}
 
-		reconciler := Reconciler{Client: cc, Owner: client.FieldOwner(t.Name())}
+		reconciler := Reconciler{Owner: client.FieldOwner(t.Name())}
+
+		// Create a client that records its requests before executing them.
+		var requests []http.Request
+		{
+			config := rest.CopyConfig(config)
+			config.Wrap(func(rt http.RoundTripper) http.RoundTripper {
+				return fnRoundTripper(func(req *http.Request) (*http.Response, error) {
+					requests = append(requests, *req.Clone(ctx))
+					return rt.RoundTrip(req)
+				})
+			})
+
+			rc, err := client.New(config, client.Options{})
+			assert.NilError(t, err)
+
+			reconciler.Client = rc
+		}
 
 		t.Run("change-to-zero", func(t *testing.T) {
 			// Start with fields filled out.
@@ -213,6 +241,65 @@ func TestServerSideApply(t *testing.T) {
 			assert.DeepEqual(t,
 				again.Spec.Template.Spec.SecurityContext,
 				intent.Spec.Template.Spec.SecurityContext)
+		})
+
+		t.Run("init-container-order", func(t *testing.T) {
+			// Start with one container.
+			intent := constructor("init-container-order")
+			intent.Spec.Template.Spec.InitContainers = []corev1.Container{{
+				Name:    "original",
+				Command: []string{"whiffling", "through"},
+			}}
+
+			// Create the StatefulSet.
+			before := intent.DeepCopy()
+			assert.NilError(t,
+				cc.Patch(ctx, before, client.Apply, client.ForceOwnership, reconciler.Owner))
+
+			// Add a container to the front.
+			intent.Spec.Template.Spec.InitContainers = append([]corev1.Container{{
+				Name: "first",
+				Args: []string{"burbled"},
+			}}, intent.Spec.Template.Spec.InitContainers...)
+
+			// client.Apply does not preserve the order.
+			after := intent.DeepCopy()
+			assert.NilError(t,
+				cc.Patch(ctx, after, client.Apply, client.ForceOwnership, reconciler.Owner))
+
+			assert.Assert(t,
+				len(after.Spec.Template.Spec.InitContainers) > 0 &&
+					after.Spec.Template.Spec.InitContainers[0].Name !=
+						intent.Spec.Template.Spec.InitContainers[0].Name,
+				"expected https://issue.k8s.io/104641, got %v",
+				after.Spec.Template.Spec.InitContainers)
+
+			// Our apply method preserves the order (and each container is correct).
+			// It does so by making two requests.
+			requests = nil
+			again := intent.DeepCopy()
+			assert.NilError(t, reconciler.apply(ctx, again))
+			assert.Equal(t, len(requests), 2, "got %v", requests)
+			assert.DeepEqual(t,
+				again.Spec.Template.Spec.InitContainers,
+				intent.Spec.Template.Spec.InitContainers,
+
+				// Some container fields are populated with defaults by the API server.
+				// Reset them to zero before comparing.
+				cmp.Transformer("", func(in corev1.Container) corev1.Container {
+					out := in.DeepCopy()
+					out.ImagePullPolicy = ""
+					out.TerminationMessagePath = ""
+					out.TerminationMessagePolicy = ""
+					return *out
+				}),
+			)
+
+			// Subsequent calls with the same intent make only one request.
+			requests = nil
+			repeat := intent.DeepCopy()
+			assert.NilError(t, reconciler.apply(ctx, repeat))
+			assert.Equal(t, len(requests), 1, "got %v", requests)
 		})
 	})
 
