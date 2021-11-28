@@ -74,9 +74,9 @@ func TestReconcileInstanceCertificates(t *testing.T) {
 	dataCert, _ := certFile(leaf.PrivateKey, leaf.Certificate)
 	assert.Assert(t,
 		cmp.Regexp(`^`+
-			`-----BEGIN [^ ]+ PRIVATE KEY-----\n`+
+			`-----BEGIN PRIVATE KEY-----\n`+
 			`([^-]+\n)+`+
-			`-----END [^ ]+ PRIVATE KEY-----\n`+
+			`-----END PRIVATE KEY-----\n`+
 			`-----BEGIN CERTIFICATE-----\n`+
 			`([^-]+\n)+`+
 			`-----END CERTIFICATE-----\n`+

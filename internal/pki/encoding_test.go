@@ -17,6 +17,7 @@ package pki
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,8 +119,8 @@ func TestPrivateKeyTextMarshaling(t *testing.T) {
 	key := root.PrivateKey
 	txt, err := key.MarshalText()
 	assert.NilError(t, err)
-	assert.Assert(t, bytes.HasPrefix(txt, []byte("-----BEGIN EC PRIVATE KEY-----\n")), "got %q", txt)
-	assert.Assert(t, bytes.HasSuffix(txt, []byte("\n-----END EC PRIVATE KEY-----\n")), "got %q", txt)
+	assert.Assert(t, bytes.HasPrefix(txt, []byte("-----BEGIN PRIVATE KEY-----\n")), "got %q", txt)
+	assert.Assert(t, bytes.HasSuffix(txt, []byte("\n-----END PRIVATE KEY-----\n")), "got %q", txt)
 
 	t.Run("RoundTrip", func(t *testing.T) {
 		var sink PrivateKey
@@ -140,18 +141,67 @@ func TestPrivateKeyTextMarshaling(t *testing.T) {
 		assert.DeepEqual(t, key, sink)
 	})
 
-	t.Run("EncodedEmpty", func(t *testing.T) {
-		txt := []byte("-----BEGIN EC PRIVATE KEY-----\n\n-----END EC PRIVATE KEY-----\n")
+	t.Run("UnmarshalEllipticCurveSEC1", func(t *testing.T) {
+		t.Run("EncodedEmpty", func(t *testing.T) {
+			txt := []byte("-----BEGIN EC PRIVATE KEY-----\n\n-----END EC PRIVATE KEY-----\n")
 
-		var sink PrivateKey
-		assert.ErrorContains(t, sink.UnmarshalText(txt), "asn1")
+			var sink PrivateKey
+			assert.ErrorContains(t, sink.UnmarshalText(txt), "asn1")
+		})
+
+		t.Run("EncodedGarbage", func(t *testing.T) {
+			txt := []byte("-----BEGIN EC PRIVATE KEY-----\nasdfasdf\n-----END EC PRIVATE KEY-----\n")
+
+			var sink PrivateKey
+			assert.ErrorContains(t, sink.UnmarshalText(txt), "asn1")
+		})
+
+		t.Run("GeneratedByOpenSSL", func(t *testing.T) {
+			openssl := require.OpenSSL(t)
+
+			// The "openssl ecparam" command generates elliptic curve keys.
+			cmd := exec.Command(openssl, "ecparam",
+				"-genkey", "-name", "prime256v1", "-outform", "PEM", "-noout", "-text")
+
+			output, err := cmd.CombinedOutput()
+			assert.NilError(t, err, "%q\n%s", cmd.Args, output)
+
+			var sink PrivateKey
+			assert.NilError(t, sink.UnmarshalText(output))
+		})
 	})
 
-	t.Run("EncodedGarbage", func(t *testing.T) {
-		txt := []byte("-----BEGIN EC PRIVATE KEY-----\nasdfasdf\n-----END EC PRIVATE KEY-----\n")
+	t.Run("UnmarshalPKCS8", func(t *testing.T) {
+		t.Run("EncodedEmpty", func(t *testing.T) {
+			txt := []byte("-----BEGIN PRIVATE KEY-----\n\n-----END PRIVATE KEY-----\n")
 
-		var sink PrivateKey
-		assert.ErrorContains(t, sink.UnmarshalText(txt), "asn1")
+			var sink PrivateKey
+			assert.ErrorContains(t, sink.UnmarshalText(txt), "asn1")
+		})
+
+		t.Run("EncodedGarbage", func(t *testing.T) {
+			txt := []byte("-----BEGIN PRIVATE KEY-----\nasdfasdf\n-----END PRIVATE KEY-----\n")
+
+			var sink PrivateKey
+			assert.ErrorContains(t, sink.UnmarshalText(txt), "asn1")
+		})
+
+		t.Run("WrongAlgorithm", func(t *testing.T) {
+			openssl := require.OpenSSL(t)
+			rsa, err := exec.Command("sh", "-ceu",
+				`"$1" genrsa | "$1" pkcs8 -topk8 -nocrypt`,
+				"--", openssl,
+			).Output()
+
+			if exit := (*exec.ExitError)(nil); errors.As(err, &exit) {
+				assert.NilError(t, err, "\n%s", exit.Stderr)
+			} else {
+				assert.NilError(t, err)
+			}
+
+			var sink PrivateKey
+			assert.ErrorContains(t, sink.UnmarshalText(rsa), "algorithm: *rsa")
+		})
 	})
 
 	t.Run("ReadByOpenSSL", func(t *testing.T) {

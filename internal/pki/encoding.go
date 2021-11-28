@@ -31,6 +31,10 @@ const (
 	// pemLabelECDSAKey is the textual encoding label for an elliptic curve private key
 	// according to RFC 5915. See https://tools.ietf.org/html/rfc5915.
 	pemLabelECDSAKey = "EC PRIVATE KEY"
+
+	// pemLabelPKCS8Key is the textual encoding label for a PKCS #8 private key
+	// according to RFC 5958. See https://tools.ietf.org/html/rfc5958.
+	pemLabelPKCS8Key = "PRIVATE KEY"
 )
 
 var (
@@ -79,13 +83,13 @@ func (k PrivateKey) MarshalText() ([]byte, error) {
 		k.ecdsa = new(ecdsa.PrivateKey)
 	}
 
-	der, err := x509.MarshalECPrivateKey(k.ecdsa)
+	der, err := x509.MarshalPKCS8PrivateKey(k.ecdsa)
 	if err != nil {
 		return nil, err
 	}
 
 	return pem.EncodeToMemory(&pem.Block{
-		Type:  pemLabelECDSAKey,
+		Type:  pemLabelPKCS8Key,
 		Bytes: der,
 	}), nil
 }
@@ -94,13 +98,28 @@ func (k PrivateKey) MarshalText() ([]byte, error) {
 func (k *PrivateKey) UnmarshalText(data []byte) error {
 	block, _ := pem.Decode(data)
 
-	if block == nil || block.Type != pemLabelECDSAKey {
+	switch {
+	case block == nil:
+		fallthrough
+	default:
 		return fmt.Errorf("not a PEM-encoded private key")
-	}
 
-	key, err := x509.ParseECPrivateKey(block.Bytes)
-	if err == nil {
-		k.ecdsa = key
+	case block.Type == pemLabelECDSAKey:
+		key, err := x509.ParseECPrivateKey(block.Bytes)
+		if err == nil {
+			k.ecdsa = key
+		}
+		return err
+
+	case block.Type == pemLabelPKCS8Key:
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err == nil {
+			if ecdsa, ok := key.(*ecdsa.PrivateKey); ok {
+				k.ecdsa = ecdsa
+			} else {
+				return fmt.Errorf("wrong private key algorithm: %T", key)
+			}
+		}
+		return err
 	}
-	return err
 }
