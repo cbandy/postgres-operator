@@ -4,6 +4,23 @@ on:
       - master
 
 jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      # - https://bugs.launchpad.net/ubuntu/+source/mawk/+bug/69724
+      - run: awk -W version && awk '/[[:space:]]/ { matched=1 } END { exit !matched }' <<< ' '
+      - run: |
+          find docs/content -not -type d -print0 | xargs -0 awk '
+            BEGIN { print "::add-matcher::.github/actions/awk-matcher.json" }
+
+            /[[:space:]]$/ { errors++; print FILENAME ":" FNR " error: Trailing space" }
+
+            END { print "::remove-matcher owner=awk::" }
+            END { exit errors != 0 }
+          '
+
   golangci-lint:
     runs-on: ubuntu-latest
     steps:
