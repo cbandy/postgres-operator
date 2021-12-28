@@ -1,0 +1,21 @@
+---
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": null,
+  "spec": null
+}
+---
+{
+  "apiVersion": "kuttl.dev/v1beta1",
+  "apply": [
+    "path/to/apply.yaml"
+  ],
+  "assert": [
+    "something/to/assert.yaml"
+  ],
+  "error": [
+    "indicates/error.yaml"
+  ],
+  "kind": "TestStep"
+}

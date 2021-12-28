@@ -1,0 +1,47 @@
+---
+# A Kubernetes resource is applied as its own step.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: some-config
+
+---
+# A testing/v1.Step becomes a single step: resources, their assert.yaml, and
+# their errors.yaml.
+apiVersion: testing/v1
+kind: Step
+timeout: 1m
+resources:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      # identity
+    spec:
+      # specification
+
+asserts:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      # lookup
+    spec:
+      # matching fields
+    status:
+      # matching fields
+
+errors:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      # lookup
+    spec:
+      # matching fields
+    status:
+      # matching fields
+
+files:
+  resources:
+    - path/to/apply.yaml
+  asserts: [something/to/assert.yaml]
+  errors:
+    - indicates/error.yaml
