@@ -205,7 +205,8 @@ check-envtest-existing: createnamespaces
 
 # Expects operator to be running
 .PHONY: check-kuttl
-check-kuttl:
+check-kuttl: clean-kuttl
+	$(GO) run ./testing/kuttl/converter testing/kuttl/e2e/*.yaml
 	${PGO_KUBE_CLIENT} ${KUTTL_TEST} \
 		--config testing/kuttl/kuttl-test.yaml
 
@@ -215,7 +216,7 @@ check-generate: generate-crd generate-deepcopy generate-rbac
 	git diff --exit-code -- config/rbac
 	git diff --exit-code -- pkg/apis
 
-clean: clean-deprecated
+clean: clean-deprecated clean-kuttl
 	rm -f bin/postgres-operator
 	rm -f config/rbac/role.yaml
 	[ ! -d build/crd/generated ] || rm -r build/crd/generated
@@ -236,6 +237,10 @@ clean-deprecated:
 	@# keys used to be generated before install
 	[ ! -d conf/pgo-backrest-repo ] || rm -r conf/pgo-backrest-repo
 	[ ! -d conf/postgres-operator ] || rm -r conf/postgres-operator
+
+.PHONY: clean-kuttl
+clean-kuttl:
+	@set -- $(wildcard testing/kuttl/e2e/*-generated); [ "$$#" -eq 0 ] || rm -r "$$@"
 
 push: $(images:%=push-%) ;
 

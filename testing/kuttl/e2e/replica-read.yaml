@@ -1,0 +1,92 @@
+---
+# Create a cluster with one primary and one replica.
+# Wait for them and the replica Service to be ready.
+apiVersion: testing/v1
+kind: Step
+resources:
+- apiVersion: postgres-operator.crunchydata.com/v1beta1
+  kind: PostgresCluster
+  metadata:
+    name: replica-read
+  spec:
+    postgresVersion: 14
+    instances:
+    - name: instance1
+      dataVolumeClaimSpec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 1Gi } } }
+      replicas: 2
+    backups:
+      pgbackrest:
+        repos:
+        - name: repo1
+          volume:
+            volumeClaimSpec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 1Gi } } }
+
+asserts:
+- apiVersion: postgres-operator.crunchydata.com/v1beta1
+  kind: PostgresCluster
+  metadata:
+    name: replica-read
+  status:
+    instances:
+    - name: instance1
+      replicas: 2
+      readyReplicas: 2
+      updatedReplicas: 2
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: replica-read-replicas
+
+---
+# Run a job that connects through the replica service.
+apiVersion: testing/v1
+kind: Step
+resources:
+- apiVersion: batch/v1
+  kind: Job
+  metadata:
+    name: psql-replica-read
+  spec:
+    backoffLimit: 3
+    template:
+      spec:
+        restartPolicy: OnFailure
+        containers:
+          - name: psql
+            image: registry.developers.crunchydata.com/crunchydata/crunchy-postgres:centos8-14.1-1
+            command:
+              # https://www.postgresql.org/docs/current/plpgsql-errors-and-messages.html#PLPGSQL-STATEMENTS-ASSERT
+              # This assertion fails on a primary causing the command to fail.
+              # Note: the `$$$$` is reduced to `$$` by Kubernetes.
+              # - https://kubernetes.io/docs/tasks/inject-data-application/
+              - psql
+              - -qc
+              - |
+                  DO $$$$
+                  BEGIN
+                    ASSERT pg_is_in_recovery();
+                  END $$$$;
+            env:
+            # The replica service is not held in the user secret, so we hard-code the address
+            # (using the downstream API for the namespace)
+            - name: NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: PGHOST
+              value: "replica-read-replicas.$(NAMESPACE).svc"
+            - name: PGPORT
+              valueFrom: { secretKeyRef: { name: replica-read-pguser-replica-read, key: port } }
+            - name: PGDATABASE
+              valueFrom: { secretKeyRef: { name: replica-read-pguser-replica-read, key: dbname } }
+            - name: PGUSER
+              valueFrom: { secretKeyRef: { name: replica-read-pguser-replica-read, key: user } }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: replica-read-pguser-replica-read, key: password } }
+
+asserts:
+- apiVersion: batch/v1
+  kind: Job
+  metadata:
+    name: psql-replica-read
+  status:
+    succeeded: 1
