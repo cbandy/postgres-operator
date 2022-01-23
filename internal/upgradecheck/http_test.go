@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wojas/genericr"
+	"github.com/go-logr/logr/funcr"
 	"gotest.tools/v3/assert"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
@@ -176,9 +176,9 @@ func TestCheckForUpgradesScheduler(t *testing.T) {
 
 		// capture logs
 		var calls []string
-		ctx = logging.NewContext(ctx, genericr.New(func(input genericr.Entry) {
-			calls = append(calls, input.Message)
-		}))
+		ctx = logging.NewContext(ctx, funcr.NewJSON(func(object string) {
+			calls = append(calls, object)
+		}, funcr.Options{}))
 
 		// A panicking call
 		funcFoo = func() (*http.Response, error) {
@@ -202,9 +202,9 @@ func TestCheckForUpgradesScheduler(t *testing.T) {
 
 		// capture logs
 		var calls []string
-		ctx = logging.NewContext(ctx, genericr.New(func(input genericr.Entry) {
-			calls = append(calls, input.Message)
-		}))
+		ctx = logging.NewContext(ctx, funcr.NewJSON(func(object string) {
+			calls = append(calls, object)
+		}, funcr.Options{}))
 
 		// Set loop time to 1s and sleep for 2s before sending the done signal -- though the cache sync
 		// failure will exit the func before the sleep ends
@@ -224,9 +224,9 @@ func TestCheckForUpgradesScheduler(t *testing.T) {
 
 		// capture logs
 		var calls []string
-		ctx = logging.NewContext(ctx, genericr.New(func(input genericr.Entry) {
-			calls = append(calls, input.Message)
-		}))
+		ctx = logging.NewContext(ctx, funcr.NewJSON(func(object string) {
+			calls = append(calls, object)
+		}, funcr.Options{}))
 
 		// A successful call
 		funcFoo = func() (*http.Response, error) {

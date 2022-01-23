@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wojas/genericr"
+	"github.com/go-logr/logr/funcr"
 	"gotest.tools/v3/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -144,9 +144,9 @@ func setupVersionServer(t *testing.T, works bool) (version.Info, *httptest.Serve
 
 func setupLogCapture(ctx context.Context) (context.Context, *[]string) {
 	calls := []string{}
-	testlog := genericr.New(func(input genericr.Entry) {
-		calls = append(calls, input.Message)
-	})
+	testlog := funcr.NewJSON(func(object string) {
+		calls = append(calls, object)
+	}, funcr.Options{})
 	return logging.NewContext(ctx, testlog), &calls
 }
 
