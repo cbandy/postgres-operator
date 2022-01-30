@@ -56,43 +56,15 @@ jobs:
       - uses: actions/setup-go@v3
         with: { go-version: 1.x }
 
-      - name: Install k3d
-        # Git tag from https://github.com/rancher/k3d/releases or "latest"
-        env: { K3D_TAG: latest }
-        run: |
-          curl --fail --silent https://raw.githubusercontent.com/rancher/k3d/main/install.sh |
-            TAG="${K3D_TAG#latest}" bash && k3d version | head -n1
-
       - name: Start k3s
-        # https://rancher.com/docs/k3s/latest/en/upgrades/basic/#release-channels
-        env: { K3S_CHANNEL: "${{ matrix.kubernetes }}" }
-        run: k3d cluster create --image="+${K3S_CHANNEL}" --no-lb --timeout=2m --wait
+        uses: ./.github/actions/k3d
+        with:
+          k3s-channel: "${{ matrix.kubernetes }}"
+          prefetch-images: |
+            registry.developers.crunchydata.com/crunchydata/crunchy-postgres:ubi8-13.6-1
+            registry.developers.crunchydata.com/crunchydata/crunchy-pgbackrest:ubi8-2.38-0
+            registry.developers.crunchydata.com/crunchydata/crunchy-pgbouncer:ubi8-1.16-2
 
-      - name: Prefetch container images
-        run: |
-          {
-            echo '"registry.developers.crunchydata.com/crunchydata/crunchy-postgres:ubi8-13.6-1"'
-            echo '"registry.developers.crunchydata.com/crunchydata/crunchy-pgbackrest:ubi8-2.38-0"'
-            echo '"registry.developers.crunchydata.com/crunchydata/crunchy-pgbouncer:ubi8-1.16-2"'
-          } |
-          jq --slurp --arg name 'image-prefetch' --argjson labels '{"name":"image-prefetch"}' '{
-            apiVersion: "apps/v1", kind: "DaemonSet",
-            metadata: { name: $name, labels: $labels },
-            spec: {
-              selector: { matchLabels: $labels },
-              template: {
-                metadata: { labels: $labels },
-                spec: {
-                  initContainers: to_entries | map({ name: "c\(.key)", command: ["true"], image: .value }),
-                  containers: [{ name: "pause", image: "k8s.gcr.io/pause:3.5" }]
-                }
-              }
-            }
-          }' |
-          kubectl create --filename=- && {
-            kubectl rollout status daemonset.apps/image-prefetch --timeout=90s ||
-            kubectl describe daemonset.apps/image-prefetch
-          }
       - run: make createnamespaces check-envtest-existing
         env:
           PGO_TEST_TIMEOUT_SCALE: 1.2
