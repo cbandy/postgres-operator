@@ -78,6 +78,64 @@ jobs:
           path: envtest-existing.coverage.gz
           retention-days: 1
 
+  kuttl-k3d:
+    runs-on: ubuntu-latest
+    needs: [go-test]
+    strategy:
+      fail-fast: false
+      matrix:
+        kubernetes: [latest]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v3
+        with: { go-version: 1.x }
+
+      - name: Start k3s
+        uses: ./.github/actions/k3d
+        with:
+          k3s-channel: "${{ matrix.kubernetes }}"
+          prefetch-images: |
+            registry.developers.crunchydata.com/crunchydata/crunchy-pgadmin4:ubi8-4.30-2
+            registry.developers.crunchydata.com/crunchydata/crunchy-pgbackrest:ubi8-2.38-2
+            registry.developers.crunchydata.com/crunchydata/crunchy-pgbouncer:ubi8-1.16-4
+            registry.developers.crunchydata.com/crunchydata/crunchy-postgres:ubi8-14.4-0
+            registry.developers.crunchydata.com/crunchydata/crunchy-postgres-gis:ubi8-14.4-3.1-0
+
+      - run: go mod download
+      - name: Build PGO
+        run: |
+          make build-postgres-operator PGO_VERSION=${{ github.sha }}
+
+      # Start a Docker container with the working directory mounted.
+      - name: Start PGO
+        run: |
+          kubectl apply --server-side -k ./config/namespace
+          kubectl apply --server-side -k ./config/dev
+          hack/create-kubeconfig.sh postgres-operator pgo
+
+          docker run --detach --network host --read-only \
+            --volume "$(pwd):/mnt" --workdir '/mnt' --env 'PATH=/mnt/bin' \
+            --env 'KUBECONFIG=hack/.kube/postgres-operator/pgo' \
+            --env 'RELATED_IMAGE_PGADMIN=registry.developers.crunchydata.com/crunchydata/crunchy-pgadmin4:ubi8-4.30-2' \
+            --env 'RELATED_IMAGE_PGBACKREST=registry.developers.crunchydata.com/crunchydata/crunchy-pgbackrest:ubi8-2.38-2' \
+            --env 'RELATED_IMAGE_PGBOUNCER=registry.developers.crunchydata.com/crunchydata/crunchy-pgbouncer:ubi8-1.16-4' \
+            --env 'RELATED_IMAGE_POSTGRES_14=registry.developers.crunchydata.com/crunchydata/crunchy-postgres:ubi8-14.4-0' \
+            --env 'RELATED_IMAGE_POSTGRES_14_GIS_3.1=registry.developers.crunchydata.com/crunchydata/crunchy-postgres-gis:ubi8-14.4-3.1-0' \
+            --name 'postgres-operator' ubuntu \
+            postgres-operator
+
+      - run: make tools/kuttl
+      - run: make generate-kuttl
+        env:
+          KUTTL_PG_VERSION: '14'
+          KUTTL_POSTGIS_VERSION: '3.1'
+          KUTTL_PSQL_IMAGE: 'registry.developers.crunchydata.com/crunchydata/crunchy-postgres:ubi8-14.4-0'
+      - run: |
+          make check-kuttl && exit
+          failed=$?
+          echo '::group::PGO logs'; docker logs 'postgres-operator'; echo '::endgroup::'
+          exit $failed
+
   coverage-report:
     if: ${{ success() || contains(needs.*.result, 'success') }}
     runs-on: ubuntu-latest
