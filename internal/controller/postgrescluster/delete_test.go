@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/crunchydata/postgres-operator/internal/patroni"
+	"github.com/crunchydata/postgres-operator/internal/testing/events"
 	"github.com/crunchydata/postgres-operator/internal/testing/require"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
@@ -200,7 +201,7 @@ func TestReconcilerHandleDelete(t *testing.T) {
 				"cluster should immediately have a finalizer")
 
 			// Continue until instances are healthy.
-			if ready := int32(0); !assert.Check(t,
+			if ready, start := int32(0), time.Now(); !assert.Check(t,
 				wait.Poll(time.Second, Scale(time.Minute), func() (bool, error) {
 					mustReconcile(t, cluster)
 					assert.NilError(t, cc.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
@@ -212,7 +213,11 @@ func TestReconcilerHandleDelete(t *testing.T) {
 					return ready >= test.waitForRunningInstances, nil
 				}), "expected %v instances to be ready, got: %v", test.waitForRunningInstances, ready,
 			) {
-				t.FailNow()
+				list := corev1.EventList{}
+				assert.NilError(t, cc.List(ctx, &list, client.InNamespace(cluster.Namespace)))
+
+				events.SortByTimestamp(list.Items)
+				t.Fatalf("Events:\n%v", events.FormatList(events.Since(list.Items, start)))
 			}
 
 			if test.beforeDelete != nil {
@@ -403,7 +408,7 @@ func TestReconcilerHandleDeleteNamespace(t *testing.T) {
 	})
 
 	// Wait until instances are healthy.
-	if ready := int32(0); !assert.Check(t,
+	if ready, start := int32(0), time.Now(); !assert.Check(t,
 		wait.Poll(time.Second, Scale(time.Minute), func() (bool, error) {
 			assert.NilError(t, cc.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
 
@@ -414,7 +419,11 @@ func TestReconcilerHandleDeleteNamespace(t *testing.T) {
 			return ready >= 2, nil
 		}), "expected 2 instances to be ready, got: %v", ready,
 	) {
-		t.FailNow()
+		list := corev1.EventList{}
+		assert.NilError(t, cc.List(ctx, &list, client.InNamespace(cluster.Namespace)))
+
+		events.SortByTimestamp(list.Items)
+		t.Fatalf("Events:\n%v", events.FormatList(events.Since(list.Items, start)))
 	}
 
 	// Delete the namespace.
