@@ -28,7 +28,6 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"gotest.tools/v3/assert"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,6 +41,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/crunchydata/postgres-operator/internal/patroni"
+	"github.com/crunchydata/postgres-operator/internal/testing/events"
 	"github.com/crunchydata/postgres-operator/internal/testing/require"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
@@ -201,29 +201,24 @@ func TestReconcilerHandleDelete(t *testing.T) {
 				"cluster should immediately have a finalizer")
 
 			// Continue until instances are healthy.
-			var instances []appsv1.StatefulSet
-			var ready int32
-			assert.NilError(t, wait.Poll(time.Second, Scale(time.Minute), func() (bool, error) {
-				mustReconcile(t, cluster)
+			if ready, start := int32(0), time.Now(); !assert.Check(t,
+				wait.Poll(time.Second, Scale(time.Minute), func() (bool, error) {
+					mustReconcile(t, cluster)
+					assert.NilError(t, cc.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
 
-				list := appsv1.StatefulSetList{}
-				selector, err := labels.Parse(strings.Join([]string{
-					"postgres-operator.crunchydata.com/cluster=" + cluster.Name,
-					"postgres-operator.crunchydata.com/instance",
-				}, ","))
-				assert.NilError(t, err)
-				assert.NilError(t, cc.List(ctx, &list,
-					client.InNamespace(cluster.Namespace),
-					client.MatchingLabelsSelector{Selector: selector}))
+					ready = 0
+					for _, set := range cluster.Status.InstanceSets {
+						ready += set.ReadyReplicas
+					}
+					return ready >= test.waitForRunningInstances, nil
+				}), "expected %v instances to be ready, got: %v", test.waitForRunningInstances, ready,
+			) {
+				list := corev1.EventList{}
+				assert.NilError(t, cc.List(ctx, &list, client.InNamespace(cluster.Namespace)))
 
-				instances = list.Items
-
-				ready = int32(0)
-				for i := range instances {
-					ready += instances[i].Status.ReadyReplicas
-				}
-				return ready >= test.waitForRunningInstances, nil
-			}), "expected %v instances to be ready, got:\n%v", test.waitForRunningInstances, ready)
+				events.SortByTimestamp(list.Items)
+				t.Fatalf("Events:\n%v", events.FormatList(events.Since(list.Items, start)))
+			}
 
 			if test.beforeDelete != nil {
 				test.beforeDelete(t, cluster)
@@ -412,27 +407,24 @@ func TestReconcilerHandleDeleteNamespace(t *testing.T) {
 				client.Merge.Type(), []byte(`{"metadata":{"finalizers":[]}}`)))))
 	})
 
-	var instances []appsv1.StatefulSet
-	var ready int32
-	assert.NilError(t, wait.Poll(time.Second, Scale(time.Minute), func() (bool, error) {
-		list := appsv1.StatefulSetList{}
-		selector, err := labels.Parse(strings.Join([]string{
-			"postgres-operator.crunchydata.com/cluster=" + cluster.Name,
-			"postgres-operator.crunchydata.com/instance",
-		}, ","))
-		assert.NilError(t, err)
-		assert.NilError(t, cc.List(ctx, &list,
-			client.InNamespace(cluster.Namespace),
-			client.MatchingLabelsSelector{Selector: selector}))
+	// Wait until instances are healthy.
+	if ready, start := int32(0), time.Now(); !assert.Check(t,
+		wait.Poll(time.Second, Scale(time.Minute), func() (bool, error) {
+			assert.NilError(t, cc.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
 
-		instances = list.Items
+			ready = 0
+			for _, set := range cluster.Status.InstanceSets {
+				ready += set.ReadyReplicas
+			}
+			return ready >= 2, nil
+		}), "expected 2 instances to be ready, got: %v", ready,
+	) {
+		list := corev1.EventList{}
+		assert.NilError(t, cc.List(ctx, &list, client.InNamespace(cluster.Namespace)))
 
-		ready = 0
-		for i := range instances {
-			ready += instances[i].Status.ReadyReplicas
-		}
-		return ready >= 2, nil
-	}), "expected 2 instances to be ready, got:\n%v", ready)
+		events.SortByTimestamp(list.Items)
+		t.Fatalf("Events:\n%v", events.FormatList(events.Since(list.Items, start)))
+	}
 
 	// Delete the namespace.
 	assert.NilError(t, cc.Delete(ctx, ns))

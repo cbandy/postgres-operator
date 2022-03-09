@@ -45,7 +45,6 @@ jobs:
           retention-days: 1
 
   kubernetes-k3d:
-    if: "${{ github.repository == 'CrunchyData/postgres-operator' }}"
     runs-on: ubuntu-latest
     needs: [go-test]
     strategy:
@@ -84,8 +83,9 @@ jobs:
               template: {
                 metadata: { labels: $labels },
                 spec: {
-                  initContainers: to_entries | map({ name: "c\(.key)", command: ["true"], image: .value }),
-                  containers: [{ name: "pause", image: "k8s.gcr.io/pause:3.5" }]
+                  containers: to_entries | map({
+                    name: "c\(.key)", image: .value, command: ["sleep", "15m"],
+                  }),
                 }
               }
             }
