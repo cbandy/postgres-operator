@@ -19,6 +19,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"math/big"
+	"strings"
 	"time"
 )
 
@@ -59,8 +60,10 @@ func (c Certificate) hasSubject(commonName string, dnsNames []string) bool {
 		c.x509.Subject.CommonName == commonName &&
 		len(c.x509.DNSNames) == len(dnsNames)
 
+	// Subject Alternative Name DNS names must not include the root label.
+	// - CA/Browser Forum, Baseline Requirements 1.8.4, Section 7.1.4.2.1
 	for i := range dnsNames {
-		ok = ok && c.x509.DNSNames[i] == dnsNames[i]
+		ok = ok && c.x509.DNSNames[i] == strings.TrimRight(dnsNames[i], ".")
 	}
 
 	return ok

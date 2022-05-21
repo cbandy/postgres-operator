@@ -224,12 +224,19 @@ func TestLeafCertificate(t *testing.T) {
 		test       string
 		commonName string
 		dnsNames   []string
+
+		dnsExpected []string
 	}{
 		{
 			test: "OnlyCommonName", commonName: "some-cn",
 		},
 		{
-			test: "OnlyDNSNames", dnsNames: []string{"local-name", "sub.domain"},
+			test: "OnlyDNSNames",
+
+			// Subject Alternative Name DNS names must not include the root label.
+			// - CA/Browser Forum, Baseline Requirements 1.8.4, Section 7.1.4.2.1
+			dnsNames:    []string{"local-name", "sub.domain", "fully.qualified."},
+			dnsExpected: []string{"local-name", "sub.domain", "fully.qualified"},
 		},
 	} {
 		t.Run(tt.test, func(t *testing.T) {
@@ -254,7 +261,7 @@ func TestLeafCertificate(t *testing.T) {
 			assert.Equal(t, cert.KeyUsage, x509.KeyUsageDigitalSignature|x509.KeyUsageKeyEncipherment)
 
 			assert.Equal(t, cert.Subject.CommonName, tt.commonName)
-			assert.DeepEqual(t, cert.DNSNames, tt.dnsNames)
+			assert.DeepEqual(t, cert.DNSNames, tt.dnsExpected)
 			assert.Assert(t, cert.EmailAddresses == nil)
 			assert.Assert(t, cert.IPAddresses == nil)
 			assert.Assert(t, cert.URIs == nil)
@@ -273,6 +280,23 @@ func TestLeafCertificate(t *testing.T) {
 				leaf.Certificate.x509.Issuer,
 				root.Certificate.x509.Subject)
 
+			// Leaf certificates should not be valid more than 397 days.
+			// - CA/Browser Forum, Baseline Requirements 1.8.4, Section 6.3.2
+			const maxValidityPeriod = 397 * 86400 * time.Second
+			assert.Assert(t,
+				cert.NotAfter.Sub(cert.NotBefore) < maxValidityPeriod,
+				"expected validity period shorter than %v, got %v",
+				maxValidityPeriod, cert.NotAfter.Sub(cert.NotBefore))
+
+			// Leaf certificates must have Extended Key Usage for
+			// "id-kp-serverAuth", "id-kp-clientAuth", or both.
+			// - CA/Browser Forum, Baseline Requirements 1.8.4, Section 7.1.2.3
+			// - https://tools.ietf.org/html/rfc5280#section-4.2.1.12
+			assert.DeepEqual(t, cert.ExtKeyUsage, []x509.ExtKeyUsage{
+				x509.ExtKeyUsageClientAuth,
+				x509.ExtKeyUsageServerAuth,
+			})
+
 			t.Run("OpenSSLVerify", func(t *testing.T) {
 				openssl := require.OpenSSL(t)
 
@@ -289,7 +313,7 @@ func TestLeafCertificate(t *testing.T) {
 				assert.Equal(t,
 					leaf.Certificate.CommonName(), tt.commonName)
 				assert.DeepEqual(t,
-					leaf.Certificate.DNSNames(), tt.dnsNames)
+					leaf.Certificate.DNSNames(), tt.dnsExpected)
 				assert.Assert(t,
 					leaf.Certificate.hasSubject(tt.commonName, tt.dnsNames))
 

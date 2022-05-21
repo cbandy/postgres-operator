@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -966,12 +967,15 @@ func TestSecret(t *testing.T) {
 	assert.NilError(t, leaf.Certificate.UnmarshalText(intent.Data["pgbackrest-repo-host.crt"]))
 	assert.NilError(t, leaf.PrivateKey.UnmarshalText(intent.Data["pgbackrest-repo-host.key"]))
 
-	assert.DeepEqual(t, leaf.Certificate.DNSNames(), []string{
-		leaf.Certificate.CommonName(),
-		"some-repo-0.some-domain.ns1.svc",
-		"some-repo-0.some-domain.ns1",
-		"some-repo-0.some-domain",
-	})
+	if dnsNames := leaf.Certificate.DNSNames(); assert.Check(t, len(dnsNames) > 0) {
+		assert.Assert(t, strings.HasPrefix(dnsNames[0],
+			"some-repo-0.some-domain.ns1.svc."), "expected FQDN")
+		assert.DeepEqual(t, dnsNames[1:], []string{
+			"some-repo-0.some-domain.ns1.svc",
+			"some-repo-0.some-domain.ns1",
+			"some-repo-0.some-domain",
+		})
+	}
 
 	// Assuming the intent is written, no change when called again.
 	existing.Data = intent.Data

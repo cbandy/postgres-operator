@@ -22,11 +22,15 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"strings"
 	"time"
 )
 
-// certificateSignatureAlgorithm is ECDSA with SHA-384, the recommended
-// signature algorithm with the P-256 curve.
+// certificateSignatureAlgorithm is ECDSA with SHA-384. The CA/Browser Forum
+// requires that SHA-256 be used with the P-256 curve, but TLS 1.2 and TLS 1.3
+// clients can likely handle both. SHA-384 is preferred for its resistance to
+// length-extension attacks.
+// - CA/Browser Forum, Baseline Requirements 1.8.4, Section 7.1.3.2.2
 const certificateSignatureAlgorithm = x509.ECDSAWithSHA384
 
 // currentTime returns the current local time. It is a variable so it can be
@@ -57,7 +61,7 @@ func generateLeafCertificate(
 	now := currentTime()
 	template := &x509.Certificate{
 		BasicConstraintsValid: true,
-		DNSNames:              dnsNames,
+		DNSNames:              make([]string, len(dnsNames)),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		NotBefore:             now.Add(leafStartValid),
 		NotAfter:              now.Add(leafExpiration),
@@ -66,6 +70,15 @@ func generateLeafCertificate(
 		Subject: pkix.Name{
 			CommonName: commonName,
 		},
+		ExtKeyUsage: []x509.ExtKeyUsage{
+			x509.ExtKeyUsageClientAuth,
+			x509.ExtKeyUsageServerAuth,
+		},
+	}
+
+	// Strip the root label from fully-qualified domain names.
+	for i := range dnsNames {
+		template.DNSNames[i] = strings.TrimRight(dnsNames[i], ".")
 	}
 
 	bytes, err := x509.CreateCertificate(rand.Reader, template, signer,
