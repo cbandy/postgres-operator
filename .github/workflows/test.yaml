@@ -129,8 +129,13 @@ jobs:
             tail -qn +2 download/*/*.coverage ) > total.coverage
           go tool cover --func total.coverage -o total-coverage.txt
           go tool cover --html total.coverage -o total-coverage.html
-          sed -e '/100.0%/d' -e "s,$(go list -m)/,," total-coverage.txt
-          awk 'END { print "::notice title=Total Coverage::" $3 " " $2 }' total-coverage.txt
+          awk >> "${GITHUB_STEP_SUMMARY}" '
+            END { print "<details><summary>Total Coverage: <code>" $3 " " $2 "</code></summary>" }
+          ' total-coverage.txt
+          sed -e '/100.0%/d' -e "s,$(go list -m)/,," total-coverage.txt | column -t |
+          awk >> "${GITHUB_STEP_SUMMARY}" '
+            NR == 1 { print "\n\n```" } { print } END { if (NR > 0) print "```\n\n"; print "</details>" }
+          '
 
       # Upload coverage to GitHub
       - run: gzip total-coverage.html
