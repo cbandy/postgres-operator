@@ -108,6 +108,7 @@ jobs:
           retention-days: 1
 
   coverage-report:
+    if: ${{ success() || contains(needs.*.result, 'success') }}
     runs-on: ubuntu-latest
     needs:
       - kubernetes-api
