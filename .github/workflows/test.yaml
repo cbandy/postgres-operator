@@ -138,7 +138,7 @@ jobs:
           echo '::group::PGO logs'; docker logs 'postgres-operator'; echo '::endgroup::'
           exit $failed
         env:
-          KUTTL_TEST: hack/tools/kuttl test --test cluster-start --timeout=180 --parallel=1
+          KUTTL_TEST: hack/tools/kuttl test --test='(cluster-start|pgbackrest-restore|pgbouncer)' --timeout=180 --parallel=1
 
       - name: Stop PGO
         run: docker stop 'postgres-operator' || true
