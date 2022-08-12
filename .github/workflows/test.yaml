@@ -135,6 +135,8 @@ jobs:
           failed=$?
           echo '::group::PGO logs'; docker logs 'postgres-operator'; echo '::endgroup::'
           exit $failed
+        env:
+          KUTTL_TEST: hack/tools/kuttl test --test cluster-start --timeout=180 --parallel=1
 
   coverage-report:
     if: ${{ success() || contains(needs.*.result, 'success') }}
