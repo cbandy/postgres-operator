@@ -47,12 +47,17 @@ ifeq ("$(PGO_BASEOS)", "ubi8")
     PACKAGER=microdnf
 endif
 
+# Setting SHELL to bash allows bash commands to be executed by recipes.
+# Options are set to exit when a recipe line exits non-zero or a piped command fails.
+SHELL = /usr/bin/env bash -O globstar -o pipefail
+.SHELLFLAGS = -ec
+
 DEBUG_BUILD ?= false
 GO ?= go
 GO_BUILD = $(GO_CMD) build -trimpath
 GO_CMD = $(GO_ENV) $(GO)
 GO_TEST ?= $(GO) test
-KUTTL_TEST ?= kuttl test
+KUTTL_TEST ?= $(KUTTL) test
 
 # Disable optimizations if creating a debug build
 ifeq ("$(DEBUG_BUILD)", "true")
@@ -210,7 +215,7 @@ check-envtest-existing: createnamespaces
 # Expects operator to be running
 .PHONY: check-kuttl
 check-kuttl:
-	${PGO_KUBE_CLIENT} ${KUTTL_TEST} \
+	${KUTTL_TEST} \
 		--config testing/kuttl/kuttl-test.yaml
 
 .PHONY: generate-kuttl
@@ -234,14 +239,12 @@ check-generate: generate-crd generate-deepcopy generate-rbac
 	git diff --exit-code -- config/rbac
 	git diff --exit-code -- pkg/apis
 
-clean: clean-deprecated
+clean: clean-deprecated clean-tools
 	rm -f bin/postgres-operator
 	rm -f config/rbac/role.yaml
 	[ ! -d testing/kuttl/e2e-generated ] || rm -r testing/kuttl/e2e-generated
 	[ ! -d testing/kuttl/e2e-generated-other ] || rm -r testing/kuttl/e2e-generated-other
 	[ ! -d build/crd/generated ] || rm -r build/crd/generated
-	[ ! -d hack/tools/envtest ] || rm -r hack/tools/envtest
-	[ ! -n "$$(ls hack/tools)" ] || rm hack/tools/*
 	[ ! -d hack/.kube ] || rm -r hack/.kube
 
 clean-deprecated:
@@ -306,3 +309,32 @@ hack/tools/envtest:
 license: licenses
 licenses:
 	./bin/license_aggregator.sh ./cmd/...
+
+## Tools
+
+.PHONY: clean-tools tools
+clean-tools:
+	rm -rf hack/krew hack/tools/envtest
+	[ ! -n "$$(ls hack/tools)" ] || rm hack/tools/*
+
+KREW ?= hack/tools/krew
+tools: tools/krew
+tools/krew:
+	$(call go-get-tool,$(KREW),sigs.k8s.io/krew/cmd/krew@v0.4.3)
+
+KUTTL ?= hack/tools/kuttl
+tools: tools/kuttl
+tools/kuttl: tools/krew
+	$(call krew-get-tool,$(KUTTL),kuttl)
+
+# go-get-tool will 'go install' any package $2 and install it to $1.
+define go-get-tool
+@[ -f '$(1)' ] || { echo Downloading '$(2)'; GOBIN='$(abspath $(dir $(1)))' $(GO) install '$(2)'; }
+endef
+
+# krew-get-tool will 'krew install' any plugin $2 and link it to $1.
+define krew-get-tool
+@[ -f '$(1)' ] || { KREW_ROOT='hack/krew' $(KREW) install '$(2)'; }
+@[ -f '$(1)' ] || { T="$$(readlink 'hack/krew/bin/kubectl-$(notdir $(1))')" && \
+        [[ '$(1)' == hack/* ]] && ln -fs "..$${T#$(realpath hack)}" '$(1)'; }
+endef
