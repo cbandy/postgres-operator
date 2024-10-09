@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgres
 
@@ -22,9 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/crunchydata/postgres-operator/internal/config"
+	"github.com/crunchydata/postgres-operator/internal/feature"
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
-	"github.com/crunchydata/postgres-operator/internal/util"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -36,6 +25,11 @@ var (
 // DataVolumeMount returns the name and mount path of the PostgreSQL data volume.
 func DataVolumeMount() corev1.VolumeMount {
 	return corev1.VolumeMount{Name: "postgres-data", MountPath: dataMountPath}
+}
+
+// TablespaceVolumeMount returns the name and mount path of the PostgreSQL tablespace data volume.
+func TablespaceVolumeMount(tablespaceName string) corev1.VolumeMount {
+	return corev1.VolumeMount{Name: "tablespace-" + tablespaceName, MountPath: tablespaceMountPath + "/" + tablespaceName}
 }
 
 // WALVolumeMount returns the name and mount path of the PostgreSQL WAL volume.
@@ -68,6 +62,7 @@ func InstancePod(ctx context.Context,
 	inInstanceSpec *v1beta1.PostgresInstanceSetSpec,
 	inClusterCertificates, inClientCertificates *corev1.SecretProjection,
 	inDataVolume, inWALVolume *corev1.PersistentVolumeClaim,
+	inTablespaceVolumes []*corev1.PersistentVolumeClaim,
 	outInstancePod *corev1.PodSpec,
 ) {
 	certVolumeMount := corev1.VolumeMount{
@@ -189,7 +184,7 @@ func InstancePod(ctx context.Context,
 		ImagePullPolicy: container.ImagePullPolicy,
 		SecurityContext: initialize.RestrictedSecurityContext(),
 
-		VolumeMounts: []corev1.VolumeMount{certVolumeMount},
+		VolumeMounts: []corev1.VolumeMount{certVolumeMount, dataVolumeMount},
 	}
 
 	if inInstanceSpec.Sidecars != nil &&
@@ -201,7 +196,7 @@ func InstancePod(ctx context.Context,
 	startup := corev1.Container{
 		Name: naming.ContainerPostgresStartup,
 
-		Command: startupCommand(inCluster, inInstanceSpec),
+		Command: startupCommand(ctx, inCluster, inInstanceSpec),
 		Env:     Environment(inCluster),
 
 		Image:           container.Image,
@@ -216,6 +211,25 @@ func InstancePod(ctx context.Context,
 		certVolume,
 		dataVolume,
 		downwardAPIVolume,
+	}
+
+	// If `TablespaceVolumes` FeatureGate is enabled, `inTablespaceVolumes` may not be nil.
+	// In that case, add any tablespace volumes to the pod, and
+	// add volumeMounts to the database and startup containers
+	for _, vol := range inTablespaceVolumes {
+		tablespaceVolumeMount := TablespaceVolumeMount(vol.Labels[naming.LabelData])
+		tablespaceVolume := corev1.Volume{
+			Name: tablespaceVolumeMount.Name,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: vol.Name,
+					ReadOnly:  false,
+				},
+			},
+		}
+		outInstancePod.Volumes = append(outInstancePod.Volumes, tablespaceVolume)
+		container.VolumeMounts = append(container.VolumeMounts, tablespaceVolumeMount)
+		startup.VolumeMounts = append(startup.VolumeMounts, tablespaceVolumeMount)
 	}
 
 	if len(inCluster.Spec.Config.Files) != 0 {
@@ -251,7 +265,7 @@ func InstancePod(ctx context.Context,
 
 	// If the InstanceSidecars feature gate is enabled and instance sidecars are
 	// defined, add the defined container to the Pod.
-	if util.DefaultMutableFeatureGate.Enabled(util.InstanceSidecars) &&
+	if feature.Enabled(ctx, feature.InstanceSidecars) &&
 		inInstanceSpec.Containers != nil {
 		outInstancePod.Containers = append(outInstancePod.Containers, inInstanceSpec.Containers...)
 	}
@@ -269,8 +283,7 @@ func PodSecurityContext(cluster *v1beta1.PostgresCluster) *corev1.PodSecurityCon
 	// - https://docs.k8s.io/concepts/security/pod-security-standards/
 	for i := range cluster.Spec.SupplementalGroups {
 		if gid := cluster.Spec.SupplementalGroups[i]; gid > 0 {
-			podSecurityContext.SupplementalGroups =
-				append(podSecurityContext.SupplementalGroups, gid)
+			podSecurityContext.SupplementalGroups = append(podSecurityContext.SupplementalGroups, gid)
 		}
 	}
 

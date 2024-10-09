@@ -1,27 +1,12 @@
-//go:build envtest
-// +build envtest
-
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -35,19 +20,73 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/crunchydata/postgres-operator/internal/feature"
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
-	"github.com/crunchydata/postgres-operator/internal/pgmonitor"
+	"github.com/crunchydata/postgres-operator/internal/testing/cmp"
 	"github.com/crunchydata/postgres-operator/internal/testing/require"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
+func testExporterCollectorsAnnotation(t *testing.T, ctx context.Context, cluster *v1beta1.PostgresCluster, queriesConfig, webConfig *corev1.ConfigMap) {
+	t.Helper()
+
+	t.Run("ExporterCollectorsAnnotation", func(t *testing.T) {
+		t.Run("UnexpectedValue", func(t *testing.T) {
+			template := new(corev1.PodTemplateSpec)
+			cluster := cluster.DeepCopy()
+			cluster.SetAnnotations(map[string]string{
+				naming.PostgresExporterCollectorsAnnotation: "wrong-value",
+			})
+
+			assert.NilError(t, addPGMonitorExporterToInstancePodSpec(ctx, cluster, template, queriesConfig, webConfig))
+
+			assert.Equal(t, len(template.Spec.Containers), 1)
+			container := template.Spec.Containers[0]
+
+			command := strings.Join(container.Command, "\n")
+			assert.Assert(t, cmp.Contains(command, "postgres_exporter"))
+			assert.Assert(t, !strings.Contains(command, "collector"))
+		})
+
+		t.Run("ExpectedValueNone", func(t *testing.T) {
+			template := new(corev1.PodTemplateSpec)
+			cluster := cluster.DeepCopy()
+			cluster.SetAnnotations(map[string]string{
+				naming.PostgresExporterCollectorsAnnotation: "None",
+			})
+
+			assert.NilError(t, addPGMonitorExporterToInstancePodSpec(ctx, cluster, template, queriesConfig, webConfig))
+
+			assert.Equal(t, len(template.Spec.Containers), 1)
+			container := template.Spec.Containers[0]
+
+			command := strings.Join(container.Command, "\n")
+			assert.Assert(t, cmp.Contains(command, "postgres_exporter"))
+			assert.Assert(t, cmp.Contains(command, "--[no-]collector"))
+
+			t.Run("LowercaseToo", func(t *testing.T) {
+				template := new(corev1.PodTemplateSpec)
+				cluster.SetAnnotations(map[string]string{
+					naming.PostgresExporterCollectorsAnnotation: "none",
+				})
+
+				assert.NilError(t, addPGMonitorExporterToInstancePodSpec(ctx, cluster, template, queriesConfig, webConfig))
+				assert.Assert(t, cmp.Contains(strings.Join(template.Spec.Containers[0].Command, "\n"), "--[no-]collector"))
+			})
+		})
+	})
+}
+
 func TestAddPGMonitorExporterToInstancePodSpec(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
 	image := "test/image:tag"
 
 	cluster := &v1beta1.PostgresCluster{}
+	cluster.Name = "pg1"
 	cluster.Spec.Port = initialize.Int32(5432)
-	cluster.Spec.Image = image
 	cluster.Spec.ImagePullPolicy = corev1.PullAlways
 
 	resources := corev1.ResourceRequirements{
@@ -56,18 +95,12 @@ func TestAddPGMonitorExporterToInstancePodSpec(t *testing.T) {
 		},
 	}
 
-	getContainerWithName := func(containers []corev1.Container, name string) corev1.Container {
-		for _, container := range containers {
-			if container.Name == name {
-				return container
-			}
-		}
-		return corev1.Container{}
-	}
+	exporterQueriesConfig := new(corev1.ConfigMap)
+	exporterQueriesConfig.Name = "query-conf"
 
 	t.Run("ExporterDisabled", func(t *testing.T) {
 		template := &corev1.PodTemplateSpec{}
-		assert.NilError(t, addPGMonitorExporterToInstancePodSpec(cluster, template, nil))
+		assert.NilError(t, addPGMonitorExporterToInstancePodSpec(ctx, cluster, template, nil, nil))
 		assert.DeepEqual(t, template, &corev1.PodTemplateSpec{})
 	})
 
@@ -87,48 +120,69 @@ func TestAddPGMonitorExporterToInstancePodSpec(t *testing.T) {
 				}},
 			},
 		}
-		assert.NilError(t, addPGMonitorExporterToInstancePodSpec(cluster, template, nil))
-		container := getContainerWithName(template.Spec.Containers, naming.ContainerPGMonitorExporter)
-		assert.Equal(t, container.Image, image)
-		assert.Equal(t, container.ImagePullPolicy, corev1.PullAlways)
-		assert.DeepEqual(t, container.Resources, resources)
-		assert.DeepEqual(t, container.Command, []string{"/opt/cpm/bin/start.sh"})
-		assert.DeepEqual(t, container.SecurityContext.Capabilities, &corev1.Capabilities{
-			Drop: []corev1.Capability{"ALL"},
-		})
-		assert.Equal(t, *container.SecurityContext.Privileged, false)
-		assert.Equal(t, *container.SecurityContext.ReadOnlyRootFilesystem, true)
-		assert.Equal(t, *container.SecurityContext.AllowPrivilegeEscalation, false)
-		assert.Equal(t, *container.Resources.Requests.Cpu(), resource.MustParse("100m"))
 
-		expectedENV := []corev1.EnvVar{
-			{Name: "CONFIG_DIR", Value: "/opt/cpm/conf"},
-			{Name: "POSTGRES_EXPORTER_PORT", Value: "9187"},
-			{Name: "PGBACKREST_INFO_THROTTLE_MINUTES", Value: "10"},
-			{Name: "PG_STAT_STATEMENTS_LIMIT", Value: "20"},
-			{Name: "PG_STAT_STATEMENTS_THROTTLE_MINUTES", Value: "-1"},
-			{Name: "EXPORTER_PG_HOST", Value: "localhost"},
-			{Name: "EXPORTER_PG_PORT", Value: fmt.Sprint(*cluster.Spec.Port)},
-			{Name: "EXPORTER_PG_DATABASE", Value: "postgres"},
-			{Name: "EXPORTER_PG_USER", Value: pgmonitor.MonitoringUser},
-			{Name: "EXPORTER_PG_PASSWORD", ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: naming.MonitoringUserSecret(cluster).Name,
-					},
-					Key: "password",
-				},
-			}}}
-		assert.DeepEqual(t, container.Env, expectedENV)
+		assert.NilError(t, addPGMonitorExporterToInstancePodSpec(ctx, cluster, template, exporterQueriesConfig, nil))
 
-		assert.Assert(t, container.Ports[0].ContainerPort == int32(9187))
-		assert.Assert(t, container.Ports[0].Name == "exporter")
-		assert.Assert(t, container.Ports[0].Protocol == "TCP")
+		assert.Equal(t, len(template.Spec.Containers), 2)
+		container := template.Spec.Containers[1]
 
-		assert.Assert(t, template.Spec.Volumes != nil)
+		command := strings.Join(container.Command, "\n")
+		assert.Assert(t, cmp.Contains(command, "postgres_exporter"))
+		assert.Assert(t, cmp.Contains(command, "--extend.query-path"))
+		assert.Assert(t, cmp.Contains(command, "--web.listen-address"))
+
+		// Exclude command from the following comparison.
+		container.Command = nil
+		assert.Assert(t, cmp.MarshalMatches(container, `
+env:
+- name: DATA_SOURCE_URI
+  value: localhost:5432/postgres
+- name: DATA_SOURCE_USER
+  value: ccp_monitoring
+- name: DATA_SOURCE_PASS_FILE
+  value: /opt/crunchy/password
+image: test/image:tag
+imagePullPolicy: Always
+name: exporter
+ports:
+- containerPort: 9187
+  name: exporter
+  protocol: TCP
+resources:
+  requests:
+    cpu: 100m
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+volumeMounts:
+- mountPath: /conf
+  name: exporter-config
+- mountPath: /opt/crunchy/
+  name: monitoring-secret
+		`))
+
+		assert.Assert(t, cmp.MarshalMatches(template.Spec.Volumes, `
+- name: exporter-config
+  projected:
+    sources:
+    - configMap:
+        name: query-conf
+- name: monitoring-secret
+  secret:
+    secretName: pg1-monitoring
+		`))
+
+		testExporterCollectorsAnnotation(t, ctx, cluster, exporterQueriesConfig, nil)
 	})
 
-	t.Run("CustomConfig", func(t *testing.T) {
+	t.Run("CustomConfigAppendCustomQueriesOff", func(t *testing.T) {
 		cluster.Spec.Monitoring = &v1beta1.MonitoringSpec{
 			PGMonitor: &v1beta1.PGMonitorSpec{
 				Exporter: &v1beta1.ExporterSpec{
@@ -151,34 +205,132 @@ func TestAddPGMonitorExporterToInstancePodSpec(t *testing.T) {
 			},
 		}
 
-		assert.NilError(t, addPGMonitorExporterToInstancePodSpec(cluster, template, nil))
+		assert.NilError(t, addPGMonitorExporterToInstancePodSpec(ctx, cluster, template, exporterQueriesConfig, nil))
 
-		var foundConfigVolume bool
-		for _, v := range template.Spec.Volumes {
-			if v.Name == "exporter-config" {
-				assert.DeepEqual(t, v, corev1.Volume{
-					Name: "exporter-config",
-					VolumeSource: corev1.VolumeSource{
-						Projected: &corev1.ProjectedVolumeSource{
-							Sources: cluster.Spec.Monitoring.PGMonitor.Exporter.Configuration,
+		assert.Equal(t, len(template.Spec.Containers), 2)
+		container := template.Spec.Containers[1]
+
+		assert.Assert(t, len(template.Spec.Volumes) > 0)
+		assert.Assert(t, cmp.MarshalMatches(template.Spec.Volumes[0], `
+name: exporter-config
+projected:
+  sources:
+  - configMap:
+      name: exporter-custom-config-test
+		`))
+
+		assert.Assert(t, len(container.VolumeMounts) > 0)
+		assert.Assert(t, cmp.MarshalMatches(container.VolumeMounts[0], `
+mountPath: /conf
+name: exporter-config
+		`))
+	})
+
+	t.Run("CustomConfigAppendCustomQueriesOn", func(t *testing.T) {
+		gate := feature.NewGate()
+		assert.NilError(t, gate.SetFromMap(map[string]bool{
+			feature.AppendCustomQueries: true,
+		}))
+		ctx := feature.NewContext(ctx, gate)
+
+		cluster.Spec.Monitoring = &v1beta1.MonitoringSpec{
+			PGMonitor: &v1beta1.PGMonitorSpec{
+				Exporter: &v1beta1.ExporterSpec{
+					Image:     image,
+					Resources: resources,
+					Configuration: []corev1.VolumeProjection{{ConfigMap: &corev1.ConfigMapProjection{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "exporter-custom-config-test",
+						},
+					}},
+					},
+				},
+			},
+		}
+		template := &corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: naming.ContainerDatabase,
+				}},
+			},
+		}
+
+		assert.NilError(t, addPGMonitorExporterToInstancePodSpec(ctx, cluster, template, exporterQueriesConfig, nil))
+
+		assert.Equal(t, len(template.Spec.Containers), 2)
+		container := template.Spec.Containers[1]
+
+		assert.Assert(t, len(template.Spec.Volumes) > 0)
+		assert.Assert(t, cmp.MarshalMatches(template.Spec.Volumes[0], `
+name: exporter-config
+projected:
+  sources:
+  - configMap:
+      name: exporter-custom-config-test
+  - configMap:
+      name: query-conf
+		`))
+
+		assert.Assert(t, len(container.VolumeMounts) > 0)
+		assert.Assert(t, cmp.MarshalMatches(container.VolumeMounts[0], `
+mountPath: /conf
+name: exporter-config
+		`))
+	})
+
+	t.Run("CustomTLS", func(t *testing.T) {
+		cluster.Spec.Monitoring = &v1beta1.MonitoringSpec{
+			PGMonitor: &v1beta1.PGMonitorSpec{
+				Exporter: &v1beta1.ExporterSpec{
+					CustomTLSSecret: &corev1.SecretProjection{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "custom-exporter-certs",
 						},
 					},
-				})
-				foundConfigVolume = true
-				break
-			}
+				},
+			},
 		}
-		assert.Assert(t, foundConfigVolume)
+		template := &corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: naming.ContainerDatabase,
+				}},
+			},
+		}
 
-		container := getContainerWithName(template.Spec.Containers, naming.ContainerPGMonitorExporter)
-		var foundConfigMount bool
-		for _, vm := range container.VolumeMounts {
-			if vm.Name == "exporter-config" && vm.MountPath == "/conf" {
-				foundConfigMount = true
-				break
-			}
-		}
-		assert.Assert(t, foundConfigMount)
+		testConfigMap := new(corev1.ConfigMap)
+		testConfigMap.Name = "test-web-conf"
+
+		assert.NilError(t, addPGMonitorExporterToInstancePodSpec(ctx, cluster, template, exporterQueriesConfig, testConfigMap))
+
+		assert.Equal(t, len(template.Spec.Containers), 2)
+		container := template.Spec.Containers[1]
+
+		assert.Assert(t, len(template.Spec.Volumes) > 2, "Expected the original two volumes")
+		assert.Assert(t, cmp.MarshalMatches(template.Spec.Volumes[2:], `
+- name: exporter-certs
+  projected:
+    sources:
+    - secret:
+        name: custom-exporter-certs
+- configMap:
+    name: test-web-conf
+  name: web-config
+		`))
+
+		assert.Assert(t, len(container.VolumeMounts) > 2, "Expected the original two mounts")
+		assert.Assert(t, cmp.MarshalMatches(container.VolumeMounts[2:], `
+- mountPath: /certs
+  name: exporter-certs
+- mountPath: /web-config
+  name: web-config
+		`))
+
+		command := strings.Join(container.Command, "\n")
+		assert.Assert(t, cmp.Contains(command, "postgres_exporter"))
+		assert.Assert(t, cmp.Contains(command, "--web.config.file"))
+
+		testExporterCollectorsAnnotation(t, ctx, cluster, exporterQueriesConfig, testConfigMap)
 	})
 }
 
@@ -186,6 +338,10 @@ func TestAddPGMonitorExporterToInstancePodSpec(t *testing.T) {
 // reacts when the kubernetes resources are in different states (e.g., checks
 // what happens when the database pod is terminating)
 func TestReconcilePGMonitorExporterSetupErrors(t *testing.T) {
+	if os.Getenv("QUERIES_CONFIG_DIR") == "" {
+		t.Skip("QUERIES_CONFIG_DIR must be set")
+	}
+
 	for _, test := range []struct {
 		name          string
 		podExecCalled bool
@@ -340,14 +496,15 @@ func TestReconcilePGMonitorExporterSetupErrors(t *testing.T) {
 			ctx := context.Background()
 			var called bool
 			reconciler := &Reconciler{
-				PodExec: func(namespace, pod, container string, stdin io.Reader, stdout,
-					stderr io.Writer, command ...string) error {
+				PodExec: func(ctx context.Context, namespace, pod, container string, stdin io.Reader,
+					stdout, stderr io.Writer, command ...string) error {
 					called = true
 					return nil
 				},
 			}
 
 			cluster := &v1beta1.PostgresCluster{}
+			cluster.Spec.PostgresVersion = 15
 			cluster.Spec.Monitoring = test.monitoring
 			cluster.Status.Monitoring.ExporterConfiguration = test.status.ExporterConfiguration
 			observed := &observedInstances{forCluster: test.instances}
@@ -363,8 +520,8 @@ func TestReconcilePGMonitorExporter(t *testing.T) {
 	ctx := context.Background()
 	var called bool
 	reconciler := &Reconciler{
-		PodExec: func(namespace, pod, container string, stdin io.Reader, stdout,
-			stderr io.Writer, command ...string) error {
+		PodExec: func(ctx context.Context, namespace, pod, container string, stdin io.Reader,
+			stdout, stderr io.Writer, command ...string) error {
 			called = true
 			return nil
 		},
@@ -400,8 +557,8 @@ func TestReconcilePGMonitorExporter(t *testing.T) {
 		called = false
 		assert.NilError(t, reconciler.reconcilePGMonitorExporter(ctx,
 			cluster, observed, nil))
-		assert.Assert(t, called)
-		assert.Assert(t, cluster.Status.Monitoring.ExporterConfiguration != "")
+		assert.Assert(t, called, "PodExec was not called.")
+		assert.Assert(t, cluster.Status.Monitoring.ExporterConfiguration != "", "ExporterConfiguration was empty.")
 	})
 }
 
@@ -409,6 +566,10 @@ func TestReconcilePGMonitorExporter(t *testing.T) {
 // when it should be. Because the status updated when we update the setup sql from
 // pgmonitor (by using podExec), we check if podExec is called when a change is needed.
 func TestReconcilePGMonitorExporterStatus(t *testing.T) {
+	if os.Getenv("QUERIES_CONFIG_DIR") == "" {
+		t.Skip("QUERIES_CONFIG_DIR must be set")
+	}
+
 	for _, test := range []struct {
 		name                        string
 		exporterEnabled             bool
@@ -440,8 +601,8 @@ func TestReconcilePGMonitorExporterStatus(t *testing.T) {
 		exporterEnabled: true,
 		podExecCalled:   false,
 		// Status was generated manually for this test case
-		// TODO jmckulk: add code to generate status
-		status:                      v1beta1.MonitoringStatus{ExporterConfiguration: "74476b9895"},
+		// TODO (jmckulk): add code to generate status
+		status:                      v1beta1.MonitoringStatus{ExporterConfiguration: "6d874c58df"},
 		statusChangedAfterReconcile: false,
 	}} {
 		t.Run(test.name, func(t *testing.T) {
@@ -453,8 +614,8 @@ func TestReconcilePGMonitorExporterStatus(t *testing.T) {
 
 			// Create reconciler with mock PodExec function
 			reconciler := &Reconciler{
-				PodExec: func(namespace, pod, container string, stdin io.Reader, stdout,
-					stderr io.Writer, command ...string) error {
+				PodExec: func(ctx context.Context, namespace, pod, container string, stdin io.Reader,
+					stdout, stderr io.Writer, command ...string) error {
 					called = true
 					return nil
 				},
@@ -462,6 +623,7 @@ func TestReconcilePGMonitorExporterStatus(t *testing.T) {
 
 			// Create the test cluster spec with the exporter status set
 			cluster := &v1beta1.PostgresCluster{}
+			cluster.Spec.PostgresVersion = 15
 			cluster.Status.Monitoring.ExporterConfiguration = test.status.ExporterConfiguration
 
 			// Mock up an instances that will be defined in the cluster. The instances should
@@ -530,7 +692,7 @@ func TestReconcilePGMonitorExporterStatus(t *testing.T) {
 // is correct. If exporter is enabled, the return shouldn't be nil. If the exporter is disabled, the
 // return should be nil.
 func TestReconcileMonitoringSecret(t *testing.T) {
-	// TODO jmckulk: debug test with existing cluster
+	// TODO (jmckulk): debug test with existing cluster
 	// Seems to be an issue when running with other tests
 	if strings.EqualFold(os.Getenv("USE_EXISTING_CLUSTER"), "true") {
 		t.Skip("Test failing with existing cluster")
@@ -551,11 +713,13 @@ func TestReconcileMonitoringSecret(t *testing.T) {
 	cluster.UID = types.UID("hippouid")
 	cluster.Namespace = setupNamespace(t, cc).Name
 
+	// If the exporter is disabled then the secret should not exist
+	// Existing secrets should be removed
 	t.Run("ExporterDisabled", func(t *testing.T) {
 		t.Run("NotExisting", func(t *testing.T) {
 			secret, err := reconciler.reconcileMonitoringSecret(ctx, cluster)
 			assert.NilError(t, err)
-			assert.Assert(t, secret == nil)
+			assert.Assert(t, secret == nil, "Monitoring secret was not nil.")
 		})
 
 		t.Run("Existing", func(t *testing.T) {
@@ -569,10 +733,12 @@ func TestReconcileMonitoringSecret(t *testing.T) {
 			cluster.Spec.Monitoring = nil
 			actual, err := reconciler.reconcileMonitoringSecret(ctx, cluster)
 			assert.NilError(t, err)
-			assert.Assert(t, actual == nil)
+			assert.Assert(t, actual == nil, "Monitoring secret still exists after turning exporter off.")
 		})
 	})
 
+	// If the exporter is enabled then a monitoring secret should exist
+	// It will need to be created or left in place with existing password
 	t.Run("ExporterEnabled", func(t *testing.T) {
 		var (
 			existing, actual *corev1.Secret
@@ -591,131 +757,83 @@ func TestReconcileMonitoringSecret(t *testing.T) {
 		t.Run("NotExisting", func(t *testing.T) {
 			existing, err = reconciler.reconcileMonitoringSecret(ctx, cluster)
 			assert.NilError(t, err)
-			assert.Assert(t, existing != nil)
+			assert.Assert(t, existing != nil, "Monitoring secret does not exist.")
 		})
 
 		t.Run("Existing", func(t *testing.T) {
 			actual, err = reconciler.reconcileMonitoringSecret(ctx, cluster)
 			assert.NilError(t, err)
-			assert.Assert(t, bytes.Equal(actual.Data["password"], existing.Data["password"]))
+			assert.Assert(t, bytes.Equal(actual.Data["password"], existing.Data["password"]), "Passwords do not match.")
 		})
 	})
 }
 
-// TestConfigureExporterTLS checks that tls settings are configured on a podTemplate.
-// When exporter is enabled with custom tls configureExporterTLS should add volumes,
-// volumeMounts, and an envVar to the template. Ensure that existing template configurations
-// are still present
-func TestConfigreExporterTLS(t *testing.T) {
-	// Define an existing template with values that could be overwritten
-	baseTemplate := &corev1.PodTemplateSpec{
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name: naming.ContainerPGMonitorExporter,
-				VolumeMounts: []corev1.VolumeMount{{
-					Name:      "existing-volume",
-					MountPath: "some-path",
-				}},
-				Env: []corev1.EnvVar{{
-					Name:  "existing-env",
-					Value: "existing-value",
-				}},
-			}},
-			Volumes: []corev1.Volume{{
-				Name: "existing-volume",
-				VolumeSource: corev1.VolumeSource{
-					EmptyDir: &corev1.EmptyDirVolumeSource{},
-				},
-			}},
-		},
-	}
+// TestReconcileExporterQueriesConfig checks that the ConfigMap intent returned by
+// reconcileExporterQueriesConfig is correct. If exporter is enabled, the return
+// shouldn't be nil. If the exporter is disabled, the return should be nil.
+func TestReconcileExporterQueriesConfig(t *testing.T) {
+	ctx := context.Background()
 
-	t.Run("Exporter disabled", func(t *testing.T) {
-		cluster := &v1beta1.PostgresCluster{}
-		template := baseTemplate.DeepCopy()
-		configureExporterTLS(cluster, template, nil)
-		// Template shouldn't have changed
-		assert.DeepEqual(t, template, baseTemplate)
+	// Kubernetes is required because reconcileExporterQueriesConfig
+	// (1) uses the client to get existing ConfigMaps
+	// (2) sets the controller reference on the new ConfigMap
+	_, cc := setupKubernetes(t)
+	require.ParallelCapacity(t, 0)
+
+	reconciler := &Reconciler{Client: cc, Owner: client.FieldOwner(t.Name())}
+
+	cluster := testCluster()
+	cluster.Default()
+	cluster.UID = types.UID("hippouid")
+	cluster.Namespace = setupNamespace(t, cc).Name
+
+	t.Run("ExporterDisabled", func(t *testing.T) {
+		t.Run("NotExisting", func(t *testing.T) {
+			queriesConfig, err := reconciler.reconcileExporterQueriesConfig(ctx, cluster)
+			assert.NilError(t, err)
+			assert.Assert(t, queriesConfig == nil, "Default queries ConfigMap is present.")
+		})
+
+		t.Run("Existing", func(t *testing.T) {
+			cluster.Spec.Monitoring = &v1beta1.MonitoringSpec{
+				PGMonitor: &v1beta1.PGMonitorSpec{
+					Exporter: &v1beta1.ExporterSpec{Image: "image"}}}
+			existing, err := reconciler.reconcileExporterQueriesConfig(ctx, cluster)
+			assert.NilError(t, err, "error in test; existing config not created")
+			assert.Assert(t, existing != nil, "error in test; existing config not created")
+
+			cluster.Spec.Monitoring = nil
+			actual, err := reconciler.reconcileExporterQueriesConfig(ctx, cluster)
+			assert.NilError(t, err)
+			assert.Assert(t, actual == nil, "Default queries config still present after disabling exporter.")
+		})
 	})
 
-	t.Run("Exporter enabled no tls", func(t *testing.T) {
-		cluster := &v1beta1.PostgresCluster{
-			Spec: v1beta1.PostgresClusterSpec{
-				Monitoring: &v1beta1.MonitoringSpec{
-					PGMonitor: &v1beta1.PGMonitorSpec{
-						Exporter: &v1beta1.ExporterSpec{},
-					},
+	t.Run("ExporterEnabled", func(t *testing.T) {
+		var (
+			existing, actual *corev1.ConfigMap
+			err              error
+		)
+
+		// Enable monitoring in the test cluster spec
+		cluster.Spec.Monitoring = &v1beta1.MonitoringSpec{
+			PGMonitor: &v1beta1.PGMonitorSpec{
+				Exporter: &v1beta1.ExporterSpec{
+					Image: "image",
 				},
 			},
 		}
-		template := baseTemplate.DeepCopy()
-		configureExporterTLS(cluster, template, nil)
-		// Template shouldn't have changed
-		assert.DeepEqual(t, template, baseTemplate)
-	})
 
-	t.Run("Custom TLS provided", func(t *testing.T) {
-		cluster := &v1beta1.PostgresCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "test"},
-			Spec: v1beta1.PostgresClusterSpec{
-				Monitoring: &v1beta1.MonitoringSpec{
-					PGMonitor: &v1beta1.PGMonitorSpec{
-						Exporter: &v1beta1.ExporterSpec{
-							CustomTLSSecret: &corev1.SecretProjection{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: "custom-exporter-certs",
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-		template := baseTemplate.DeepCopy()
+		t.Run("NotExisting", func(t *testing.T) {
+			existing, err = reconciler.reconcileExporterQueriesConfig(ctx, cluster)
+			assert.NilError(t, err)
+			assert.Assert(t, existing != nil, "Default queries config does not exist.")
+		})
 
-		testConfigMap := &corev1.ConfigMap{
-			ObjectMeta: naming.ExporterWebConfigMap(cluster),
-		}
-
-		// What happens if the template already includes volumes/Mounts and envs?
-		configureExporterTLS(cluster, template, testConfigMap)
-
-		// Did we configure the cert volume and the web config volume while leaving
-		// existing volumes in place?
-		assert.Assert(t, marshalMatches(template.Spec.Volumes, `
-- emptyDir: {}
-  name: existing-volume
-- name: exporter-certs
-  projected:
-    sources:
-    - secret:
-        name: custom-exporter-certs
-- configMap:
-    name: test-exporter-web-config
-  name: web-config
-		`))
-
-		// Is the exporter container in position 0?
-		assert.Assert(t, template.Spec.Containers[0].Name == naming.ContainerPGMonitorExporter)
-
-		// Did we configure the volume mounts on the container while leaving existing
-		// mounts in place?
-		assert.Assert(t, marshalMatches(template.Spec.Containers[0].VolumeMounts, `
-- mountPath: some-path
-  name: existing-volume
-- mountPath: /certs
-  name: exporter-certs
-- mountPath: /web-config
-  name: web-config
-		`))
-
-		// Did we set the `WEB_CONFIG_DIR` env var on the container while leaving
-		// existing vars in place?
-		assert.Assert(t, marshalMatches(template.Spec.Containers[0].Env, `
-- name: existing-env
-  value: existing-value
-- name: WEB_CONFIG_DIR
-  value: web-config/
-		`))
+		t.Run("Existing", func(t *testing.T) {
+			actual, err = reconciler.reconcileExporterQueriesConfig(ctx, cluster)
+			assert.NilError(t, err)
+			assert.Assert(t, actual.Data["defaultQueries.yml"] == existing.Data["defaultQueries.yml"], "Data does not align.")
+		})
 	})
 }

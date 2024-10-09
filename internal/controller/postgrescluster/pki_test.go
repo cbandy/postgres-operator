@@ -1,20 +1,6 @@
-//go:build envtest
-// +build envtest
-
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
@@ -85,6 +71,10 @@ func TestReconcileCerts(t *testing.T) {
 	primaryService := new(corev1.Service)
 	primaryService.Namespace = namespace
 	primaryService.Name = "the-primary"
+
+	replicaService := new(corev1.Service)
+	replicaService.Namespace = namespace
+	replicaService.Name = "the-replicas"
 
 	t.Run("check root certificate reconciliation", func(t *testing.T) {
 
@@ -295,14 +285,14 @@ func TestReconcileCerts(t *testing.T) {
 		assert.NilError(t, err)
 
 		t.Run("check standard secret projection", func(t *testing.T) {
-			secretCertProj, err := r.reconcileClusterCertificate(ctx, initialRoot, cluster1, primaryService)
+			secretCertProj, err := r.reconcileClusterCertificate(ctx, initialRoot, cluster1, primaryService, replicaService)
 			assert.NilError(t, err)
 
 			assert.DeepEqual(t, testSecretProjection, secretCertProj)
 		})
 
 		t.Run("check custom secret projection", func(t *testing.T) {
-			customSecretCertProj, err := r.reconcileClusterCertificate(ctx, initialRoot, cluster2, primaryService)
+			customSecretCertProj, err := r.reconcileClusterCertificate(ctx, initialRoot, cluster2, primaryService, replicaService)
 			assert.NilError(t, err)
 
 			assert.DeepEqual(t, customSecretProjection, customSecretCertProj)
@@ -319,7 +309,7 @@ func TestReconcileCerts(t *testing.T) {
 			testSecretProjection := clusterCertSecretProjection(testSecret)
 
 			// reconcile the secret project using the normal process
-			customSecretCertProj, err := r.reconcileClusterCertificate(ctx, initialRoot, cluster2, primaryService)
+			customSecretCertProj, err := r.reconcileClusterCertificate(ctx, initialRoot, cluster2, primaryService, replicaService)
 			assert.NilError(t, err)
 
 			// results should be the same
@@ -349,7 +339,7 @@ func TestReconcileCerts(t *testing.T) {
 			assert.NilError(t, err)
 
 			// pass in the new root, which should result in a new cluster cert
-			_, err = r.reconcileClusterCertificate(ctx, returnedRoot, cluster1, primaryService)
+			_, err = r.reconcileClusterCertificate(ctx, returnedRoot, cluster1, primaryService, replicaService)
 			assert.NilError(t, err)
 
 			// get the new cluster cert secret
@@ -371,10 +361,15 @@ func TestReconcileCerts(t *testing.T) {
 				"got %q", leaf.Certificate.CommonName())
 
 			if dnsNames := leaf.Certificate.DNSNames(); assert.Check(t, len(dnsNames) > 1) {
-				assert.DeepEqual(t, dnsNames[1:], []string{
+				assert.DeepEqual(t, dnsNames[1:4], []string{
 					"the-primary." + namespace + ".svc",
 					"the-primary." + namespace,
 					"the-primary",
+				})
+				assert.DeepEqual(t, dnsNames[5:8], []string{
+					"the-replicas." + namespace + ".svc",
+					"the-replicas." + namespace,
+					"the-replicas",
 				})
 			}
 		})

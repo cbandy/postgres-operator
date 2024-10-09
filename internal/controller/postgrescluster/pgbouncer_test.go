@@ -1,20 +1,6 @@
-//go:build envtest
-// +build envtest
-
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
@@ -29,11 +15,13 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/testing/cmp"
 	"github.com/crunchydata/postgres-operator/internal/testing/require"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
@@ -62,7 +50,7 @@ func TestGeneratePGBouncerService(t *testing.T) {
 			assert.NilError(t, err)
 			assert.Assert(t, !specified)
 
-			assert.Assert(t, marshalMatches(service.ObjectMeta, `
+			assert.Assert(t, cmp.MarshalMatches(service.ObjectMeta, `
 creationTimestamp: null
 name: pg7-pgbouncer
 namespace: ns5
@@ -77,11 +65,11 @@ namespace: ns5
 	}
 
 	alwaysExpect := func(t testing.TB, service *corev1.Service) {
-		assert.Assert(t, marshalMatches(service.TypeMeta, `
+		assert.Assert(t, cmp.MarshalMatches(service.TypeMeta, `
 apiVersion: v1
 kind: Service
 		`))
-		assert.Assert(t, marshalMatches(service.ObjectMeta, `
+		assert.Assert(t, cmp.MarshalMatches(service.ObjectMeta, `
 creationTimestamp: null
 labels:
   postgres-operator.crunchydata.com/cluster: pg7
@@ -175,7 +163,7 @@ ownerReferences:
 		alwaysExpect(t, service)
 		// Defaults to ClusterIP.
 		assert.Equal(t, service.Spec.Type, corev1.ServiceTypeClusterIP)
-		assert.Assert(t, marshalMatches(service.Spec.Ports, `
+		assert.Assert(t, cmp.MarshalMatches(service.Spec.Ports, `
 - name: pgbouncer
   port: 9651
   protocol: TCP
@@ -208,7 +196,7 @@ ownerReferences:
 			assert.Assert(t, specified)
 			alwaysExpect(t, service)
 			test.Expect(t, service)
-			assert.Assert(t, marshalMatches(service.Spec.Ports, `
+			assert.Assert(t, cmp.MarshalMatches(service.Spec.Ports, `
 - name: pgbouncer
   port: 9651
   protocol: TCP
@@ -233,7 +221,7 @@ ownerReferences:
 				assert.NilError(t, err)
 				assert.Equal(t, service.Spec.Type, corev1.ServiceTypeNodePort)
 				alwaysExpect(t, service)
-				assert.Assert(t, marshalMatches(service.Spec.Ports, `
+				assert.Assert(t, cmp.MarshalMatches(service.Spec.Ports, `
 - name: pgbouncer
   nodePort: 32001
   port: 9651
@@ -246,7 +234,7 @@ ownerReferences:
 				assert.NilError(t, err)
 				assert.Equal(t, service.Spec.Type, corev1.ServiceTypeLoadBalancer)
 				alwaysExpect(t, service)
-				assert.Assert(t, marshalMatches(service.Spec.Ports, `
+				assert.Assert(t, cmp.MarshalMatches(service.Spec.Ports, `
 - name: pgbouncer
   nodePort: 32002
   port: 9651
@@ -380,6 +368,7 @@ func TestGeneratePGBouncerDeployment(t *testing.T) {
 	_, cc := setupKubernetes(t)
 	require.ParallelCapacity(t, 0)
 
+	ctx := context.Background()
 	reconciler := &Reconciler{Client: cc}
 
 	cluster := &v1beta1.PostgresCluster{}
@@ -393,11 +382,11 @@ func TestGeneratePGBouncerDeployment(t *testing.T) {
 			cluster := cluster.DeepCopy()
 			cluster.Spec.Proxy = spec
 
-			deploy, specified, err := reconciler.generatePGBouncerDeployment(cluster, nil, nil, nil)
+			deploy, specified, err := reconciler.generatePGBouncerDeployment(ctx, cluster, nil, nil, nil)
 			assert.NilError(t, err)
 			assert.Assert(t, !specified)
 
-			assert.Assert(t, marshalMatches(deploy.ObjectMeta, `
+			assert.Assert(t, cmp.MarshalMatches(deploy.ObjectMeta, `
 creationTimestamp: null
 name: test-cluster-pgbouncer
 namespace: ns3
@@ -426,7 +415,7 @@ namespace: ns3
 		}
 
 		deploy, specified, err := reconciler.generatePGBouncerDeployment(
-			cluster, primary, configmap, secret)
+			ctx, cluster, primary, configmap, secret)
 		assert.NilError(t, err)
 		assert.Assert(t, specified)
 
@@ -466,7 +455,7 @@ namespace: ns3
 
 	t.Run("PodSpec", func(t *testing.T) {
 		deploy, specified, err := reconciler.generatePGBouncerDeployment(
-			cluster, primary, configmap, secret)
+			ctx, cluster, primary, configmap, secret)
 		assert.NilError(t, err)
 		assert.Assert(t, specified)
 
@@ -482,7 +471,7 @@ namespace: ns3
 		// topology spread constraints and spec.disableDefaultPodScheduling being
 		// set to true (as done in instance StatefulSet tests).
 
-		assert.Assert(t, marshalMatches(deploy.Spec.Template.Spec, `
+		assert.Assert(t, cmp.MarshalMatches(deploy.Spec.Template.Spec, `
 automountServiceAccountToken: false
 containers: null
 enableServiceLinks: false
@@ -512,7 +501,7 @@ topologySpreadConstraints:
 			cluster.Spec.DisableDefaultPodScheduling = initialize.Bool(true)
 
 			deploy, specified, err := reconciler.generatePGBouncerDeployment(
-				cluster, primary, configmap, secret)
+				ctx, cluster, primary, configmap, secret)
 			assert.NilError(t, err)
 			assert.Assert(t, specified)
 
@@ -563,7 +552,7 @@ func TestReconcilePGBouncerDisruptionBudget(t *testing.T) {
 		cluster := testCluster()
 		cluster.Namespace = ns.Name
 		cluster.Spec.Proxy.PGBouncer.Replicas = initialize.Int32(1)
-		cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.IntOrStringInt32(0)
+		cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.Pointer(intstr.FromInt32(0))
 		assert.NilError(t, r.reconcilePGBouncerPodDisruptionBudget(ctx, cluster))
 		assert.Assert(t, !foundPDB(cluster))
 	})
@@ -572,7 +561,7 @@ func TestReconcilePGBouncerDisruptionBudget(t *testing.T) {
 		cluster := testCluster()
 		cluster.Namespace = ns.Name
 		cluster.Spec.Proxy.PGBouncer.Replicas = initialize.Int32(1)
-		cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.IntOrStringInt32(1)
+		cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.Pointer(intstr.FromInt32(1))
 
 		assert.NilError(t, r.Client.Create(ctx, cluster))
 		t.Cleanup(func() { assert.Check(t, r.Client.Delete(ctx, cluster)) })
@@ -581,7 +570,7 @@ func TestReconcilePGBouncerDisruptionBudget(t *testing.T) {
 		assert.Assert(t, foundPDB(cluster))
 
 		t.Run("deleted", func(t *testing.T) {
-			cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.IntOrStringInt32(0)
+			cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.Pointer(intstr.FromInt32(0))
 			err := r.reconcilePGBouncerPodDisruptionBudget(ctx, cluster)
 			if apierrors.IsConflict(err) {
 				// When running in an existing environment another controller will sometimes update
@@ -599,7 +588,7 @@ func TestReconcilePGBouncerDisruptionBudget(t *testing.T) {
 		cluster := testCluster()
 		cluster.Namespace = ns.Name
 		cluster.Spec.Proxy.PGBouncer.Replicas = initialize.Int32(1)
-		cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.IntOrStringString("50%")
+		cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.Pointer(intstr.FromString("50%"))
 
 		assert.NilError(t, r.Client.Create(ctx, cluster))
 		t.Cleanup(func() { assert.Check(t, r.Client.Delete(ctx, cluster)) })
@@ -608,7 +597,7 @@ func TestReconcilePGBouncerDisruptionBudget(t *testing.T) {
 		assert.Assert(t, foundPDB(cluster))
 
 		t.Run("deleted", func(t *testing.T) {
-			cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.IntOrStringString("0%")
+			cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.Pointer(intstr.FromString("0%"))
 			err := r.reconcilePGBouncerPodDisruptionBudget(ctx, cluster)
 			if apierrors.IsConflict(err) {
 				// When running in an existing environment another controller will sometimes update
@@ -622,13 +611,13 @@ func TestReconcilePGBouncerDisruptionBudget(t *testing.T) {
 		})
 
 		t.Run("delete with 00%", func(t *testing.T) {
-			cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.IntOrStringString("50%")
+			cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.Pointer(intstr.FromString("50%"))
 
 			assert.NilError(t, r.reconcilePGBouncerPodDisruptionBudget(ctx, cluster))
 			assert.Assert(t, foundPDB(cluster))
 
 			t.Run("deleted", func(t *testing.T) {
-				cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.IntOrStringString("00%")
+				cluster.Spec.Proxy.PGBouncer.MinAvailable = initialize.Pointer(intstr.FromString("00%"))
 				err := r.reconcilePGBouncerPodDisruptionBudget(ctx, cluster)
 				if apierrors.IsConflict(err) {
 					// When running in an existing environment another controller will sometimes update

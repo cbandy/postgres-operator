@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
@@ -35,8 +24,8 @@ const (
 	rootCertFile    = "ca.crt"
 )
 
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={get}
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={create,patch}
 
 // reconcileRootCertificate ensures the root certificate, stored
 // in the relevant secret, has been created and is not 'bad' due
@@ -103,8 +92,8 @@ func (r *Reconciler) reconcileRootCertificate(
 	return root, err
 }
 
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={get}
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={create,patch}
 
 // reconcileClusterCertificate first checks if a custom certificate
 // secret is configured. If so, that secret projection is returned.
@@ -118,6 +107,7 @@ func (r *Reconciler) reconcileRootCertificate(
 func (r *Reconciler) reconcileClusterCertificate(
 	ctx context.Context, root *pki.RootCertificateAuthority,
 	cluster *v1beta1.PostgresCluster, primaryService *corev1.Service,
+	replicaService *corev1.Service,
 ) (
 	*corev1.SecretProjection, error,
 ) {
@@ -133,7 +123,7 @@ func (r *Reconciler) reconcileClusterCertificate(
 		r.Client.Get(ctx, client.ObjectKeyFromObject(existing), existing)))
 
 	leaf := &pki.LeafCertificate{}
-	dnsNames := naming.ServiceDNSNames(ctx, primaryService)
+	dnsNames := append(naming.ServiceDNSNames(ctx, primaryService), naming.ServiceDNSNames(ctx, replicaService)...)
 	dnsFQDN := dnsNames[0]
 
 	if err == nil {
@@ -188,8 +178,8 @@ func (r *Reconciler) reconcileClusterCertificate(
 	return clusterCertSecretProjection(intent), err
 }
 
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={get}
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={create,patch}
 
 // instanceCertificate populates intent with the DNS leaf certificate and
 // returns it. It also ensures the leaf certificate, stored in the relevant

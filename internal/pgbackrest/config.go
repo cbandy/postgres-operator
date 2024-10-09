@@ -1,23 +1,13 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package pgbackrest
 
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -98,33 +88,37 @@ func CreatePGBackRestConfigMapIntent(postgresCluster *v1beta1.PostgresCluster,
 	}
 
 	// create an empty map for the config data
-	initialize.StringMap(&cm.Data)
+	initialize.Map(&cm.Data)
 
-	addDedicatedHost := DedicatedRepoHostEnabled(postgresCluster)
 	pgdataDir := postgres.DataDirectory(postgresCluster)
 	// Port will always be populated, since the API will set a default of 5432 if not provided
 	pgPort := *postgresCluster.Spec.Port
 	cm.Data[CMInstanceKey] = iniGeneratedWarning +
 		populatePGInstanceConfigurationMap(
-			serviceName, serviceNamespace, repoHostName,
-			pgdataDir, pgPort, postgresCluster.Spec.Backups.PGBackRest.Repos,
+			serviceName, serviceNamespace, repoHostName, pgdataDir,
+			config.FetchKeyCommand(&postgresCluster.Spec),
+			strconv.Itoa(postgresCluster.Spec.PostgresVersion),
+			pgPort, postgresCluster.Spec.Backups.PGBackRest.Repos,
 			postgresCluster.Spec.Backups.PGBackRest.Global,
 		).String()
 
-	// As the cluster transitions from having a repository host to having none,
 	// PostgreSQL instances that have not rolled out expect to mount a server
 	// config file. Always populate that file so those volumes stay valid and
-	// Kubernetes propagates their contents to those pods.
+	// Kubernetes propagates their contents to those pods. The repo host name
+	// given below should always be set, but this guards for cases when it might
+	// not be.
 	cm.Data[serverConfigMapKey] = ""
 
-	if addDedicatedHost && repoHostName != "" {
+	if repoHostName != "" {
 		cm.Data[serverConfigMapKey] = iniGeneratedWarning +
 			serverConfig(postgresCluster).String()
 
 		cm.Data[CMRepoKey] = iniGeneratedWarning +
 			populateRepoHostConfigurationMap(
 				serviceName, serviceNamespace,
-				pgdataDir, pgPort, instanceNames,
+				pgdataDir, config.FetchKeyCommand(&postgresCluster.Spec),
+				strconv.Itoa(postgresCluster.Spec.PostgresVersion),
+				pgPort, instanceNames,
 				postgresCluster.Spec.Backups.PGBackRest.Repos,
 				postgresCluster.Spec.Backups.PGBackRest.Global,
 			).String()
@@ -177,7 +171,7 @@ func MakePGBackrestLogDir(template *corev1.PodTemplateSpec,
 //   - Renames the data directory as needed to bootstrap the cluster using the restored database.
 //     This ensures compatibility with the "existing" bootstrap method that is included in the
 //     Patroni config when bootstrapping a cluster using an existing data directory.
-func RestoreCommand(pgdata string, args ...string) []string {
+func RestoreCommand(pgdata, hugePagesSetting, fetchKeyCommand string, tablespaceVolumes []*corev1.PersistentVolumeClaim, args ...string) []string {
 
 	// After pgBackRest restores files, PostgreSQL starts in recovery to finish
 	// replaying WAL files. "hot_standby" is "on" (by default) so we can detect
@@ -205,15 +199,30 @@ func RestoreCommand(pgdata string, args ...string) []string {
 	// The 'pg_ctl' timeout is set to a very large value (1 year) to ensure there
 	// are no timeouts when starting or stopping Postgres.
 
-	const restoreScript = `declare -r pgdata="$1" opts="$2"
-install --directory --mode=0700 "${pgdata}"
+	tablespaceCmd := ""
+	for _, tablespaceVolume := range tablespaceVolumes {
+		tablespaceCmd = tablespaceCmd + fmt.Sprintf(
+			"\ninstall --directory --mode=0700 '/tablespaces/%s/data'",
+			tablespaceVolume.Labels[naming.LabelData])
+	}
+
+	// If the fetch key command is not empty, save the GUC variable and value
+	// to a new string.
+	var ekc string
+	if fetchKeyCommand != "" {
+		ekc = `
+encryption_key_command = '` + fetchKeyCommand + `'`
+	}
+
+	restoreScript := `declare -r pgdata="$1" opts="$2"
+install --directory --mode=0700 "${pgdata}"` + tablespaceCmd + `
 rm -f "${pgdata}/postmaster.pid"
 bash -xc "pgbackrest restore ${opts}"
 rm -f "${pgdata}/patroni.dynamic.json"
 export PGDATA="${pgdata}" PGHOST='/tmp'
 
-until [ "${recovery=}" = 'f' ]; do
-if [ -z "${recovery}" ]; then
+until [[ "${recovery=}" == 'f' ]]; do
+if [[ -z "${recovery}" ]]; then
 control=$(pg_controldata)
 read -r max_conn <<< "${control##*max_connections setting:}"
 read -r max_lock <<< "${control##*max_locks_per_xact setting:}"
@@ -228,9 +237,12 @@ max_connections = '${max_conn}'
 max_locks_per_transaction = '${max_lock}'
 max_prepared_transactions = '${max_ptxn}'
 max_worker_processes = '${max_work}'
-unix_socket_directories = '/tmp'
+unix_socket_directories = '/tmp'` +
+		// Add the encryption key command setting, if provided.
+		ekc + `
+huge_pages = ` + hugePagesSetting + `
 EOF
-if [ "$(< "${pgdata}/PG_VERSION")" -ge 12 ]; then
+if [[ "$(< "${pgdata}/PG_VERSION")" -ge 12 ]]; then
 read -r max_wals <<< "${control##*max_wal_senders setting:}"
 echo >> /tmp/postgres.restore.conf "max_wal_senders = '${max_wals}'"
 fi
@@ -242,7 +254,7 @@ recovery=$(psql -Atc "SELECT CASE
   WHEN NOT pg_catalog.pg_is_in_recovery() THEN false
   WHEN NOT pg_catalog.pg_is_wal_replay_paused() THEN true
   ELSE pg_catalog.pg_wal_replay_resume()::text = ''
-END recovery" && sleep 1) || true
+END recovery" && sleep 1) ||:
 done
 
 pg_ctl stop --silent --wait --timeout=31536000
@@ -251,10 +263,47 @@ mv "${pgdata}" "${pgdata}_bootstrap"`
 	return append([]string{"bash", "-ceu", "--", restoreScript, "-", pgdata}, args...)
 }
 
+// DedicatedSnapshotVolumeRestoreCommand returns the command for performing a pgBackRest delta restore
+// into a dedicated snapshot volume. In addition to calling the pgBackRest restore command with any
+// pgBackRest options provided, the script also removes the patroni.dynamic.json file if present. This
+// ensures the configuration from the cluster being restored from is not utilized when bootstrapping a
+// new cluster, and the configuration for the new cluster is utilized instead.
+func DedicatedSnapshotVolumeRestoreCommand(pgdata string, args ...string) []string {
+
+	// The postmaster.pid file is removed, if it exists, before attempting a restore.
+	// This allows the restore to be tried more than once without the causing an
+	// error due to the presence of the file in subsequent attempts.
+
+	// Wrap pgbackrest restore command in backup_label checks. If pre/post
+	// backup_labels are different, restore moved database forward, so return 0
+	// so that the Job is successful and we know to proceed with snapshot.
+	// Otherwise return 1, Job will fail, and we will not proceed with snapshot.
+	restoreScript := `declare -r pgdata="$1" opts="$2"
+BACKUP_LABEL=$([[ ! -e "${pgdata}/backup_label" ]] || md5sum "${pgdata}/backup_label")
+echo "Starting pgBackRest delta restore"
+
+install --directory --mode=0700 "${pgdata}"
+rm -f "${pgdata}/postmaster.pid"
+bash -xc "pgbackrest restore ${opts}"
+rm -f "${pgdata}/patroni.dynamic.json"
+
+BACKUP_LABEL_POST=$([[ ! -e "${pgdata}/backup_label" ]] || md5sum "${pgdata}/backup_label")
+if [[ "${BACKUP_LABEL}" != "${BACKUP_LABEL_POST}" ]]
+then
+  exit 0
+fi
+echo Database was not advanced by restore. No snapshot will be taken.
+echo Check that your last backup was successful.
+exit 1`
+
+	return append([]string{"bash", "-ceu", "--", restoreScript, "-", pgdata}, args...)
+}
+
 // populatePGInstanceConfigurationMap returns options representing the pgBackRest configuration for
 // a PostgreSQL instance
 func populatePGInstanceConfigurationMap(
-	serviceName, serviceNamespace, repoHostName, pgdataDir string,
+	serviceName, serviceNamespace, repoHostName, pgdataDir,
+	fetchKeyCommand, postgresVersion string,
 	pgPort int32, repos []v1beta1.PGBackRestRepo,
 	globalConfig map[string]string,
 ) iniSectionSet {
@@ -267,6 +316,10 @@ func populatePGInstanceConfigurationMap(
 	global := iniMultiSet{}
 	stanza := iniMultiSet{}
 
+	// For faster and more robust WAL archiving, we turn on pgBackRest archive-async.
+	global.Set("archive-async", "y")
+	// pgBackRest spool-path should always be co-located with the Postgres WAL path.
+	global.Set("spool-path", "/pgdata/pgbackrest-spool")
 	// pgBackRest will log to the pgData volume for commands run on the PostgreSQL instance
 	global.Set("log-path", naming.PGBackRestPGDataLogPath)
 
@@ -304,6 +357,12 @@ func populatePGInstanceConfigurationMap(
 	stanza.Set("pg1-port", fmt.Sprint(pgPort))
 	stanza.Set("pg1-socket-path", postgres.SocketDirectory)
 
+	if fetchKeyCommand != "" {
+		stanza.Set("archive-header-check", "n")
+		stanza.Set("page-header-check", "n")
+		stanza.Set("pg-version-force", postgresVersion)
+	}
+
 	return iniSectionSet{
 		"global":          global,
 		DefaultStanzaName: stanza,
@@ -313,7 +372,8 @@ func populatePGInstanceConfigurationMap(
 // populateRepoHostConfigurationMap returns options representing the pgBackRest configuration for
 // a pgBackRest dedicated repository host
 func populateRepoHostConfigurationMap(
-	serviceName, serviceNamespace, pgdataDir string,
+	serviceName, serviceNamespace, pgdataDir,
+	fetchKeyCommand, postgresVersion string,
 	pgPort int32, pgHosts []string, repos []v1beta1.PGBackRestRepo,
 	globalConfig map[string]string,
 ) iniSectionSet {
@@ -337,11 +397,16 @@ func populateRepoHostConfigurationMap(
 		if !pgBackRestLogPathSet && repo.Volume != nil {
 			// pgBackRest will log to the first configured repo volume when commands
 			// are run on the pgBackRest repo host. With our previous check in
-			// DedicatedRepoHostEnabled(), we've already validated that at least one
+			// RepoHostVolumeDefined(), we've already validated that at least one
 			// defined repo has a volume.
 			global.Set("log-path", fmt.Sprintf(naming.PGBackRestRepoLogPath, repo.Name))
 			pgBackRestLogPathSet = true
 		}
+	}
+
+	// If no log path was set, don't log because the default path is not writable.
+	if !pgBackRestLogPathSet {
+		global.Set("log-level-file", "off")
 	}
 
 	for option, val := range globalConfig {
@@ -364,6 +429,12 @@ func populateRepoHostConfigurationMap(
 		stanza.Set(fmt.Sprintf("pg%d-path", i+1), pgdataDir)
 		stanza.Set(fmt.Sprintf("pg%d-port", i+1), fmt.Sprint(pgPort))
 		stanza.Set(fmt.Sprintf("pg%d-socket-path", i+1), postgres.SocketDirectory)
+
+		if fetchKeyCommand != "" {
+			stanza.Set("archive-header-check", "n")
+			stanza.Set("page-header-check", "n")
+			stanza.Set("pg-version-force", postgresVersion)
+		}
 	}
 
 	return iniSectionSet{
@@ -414,21 +485,21 @@ func reloadCommand(name string) []string {
 	// mtimes.
 	// - https://unix.stackexchange.com/a/407383
 	const script = `
-exec {fd}<> <(:)
+exec {fd}<> <(:||:)
 until read -r -t 5 -u "${fd}"; do
   if
-    [ "${filename}" -nt "/proc/self/fd/${fd}" ] &&
+    [[ "${filename}" -nt "/proc/self/fd/${fd}" ]] &&
     pkill -HUP --exact --parent=0 pgbackrest
   then
-    exec {fd}>&- && exec {fd}<> <(:)
+    exec {fd}>&- && exec {fd}<> <(:||:)
     stat --dereference --format='Loaded configuration dated %y' "${filename}"
   elif
-    { [ "${directory}" -nt "/proc/self/fd/${fd}" ] ||
-      [ "${authority}" -nt "/proc/self/fd/${fd}" ]
+    { [[ "${directory}" -nt "/proc/self/fd/${fd}" ]] ||
+      [[ "${authority}" -nt "/proc/self/fd/${fd}" ]]
     } &&
     pkill -HUP --exact --parent=0 pgbackrest
   then
-    exec {fd}>&- && exec {fd}<> <(:)
+    exec {fd}>&- && exec {fd}<> <(:||:)
     stat --format='Loaded certificates dated %y' "${directory}"
   fi
 done
@@ -455,7 +526,7 @@ func serverConfig(cluster *v1beta1.PostgresCluster) iniSectionSet {
 	//
 	// NOTE(cbandy): The unspecified IPv6 address, which ends up being the IPv6
 	// wildcard address, did not work in all environments. In some cases, the
-	// the "server-ping" command would not connect.
+	// "server-ping" command would not connect.
 	// - https://tools.ietf.org/html/rfc3493#section-3.8
 	//
 	// TODO(cbandy): When pgBackRest provides a way to bind to all addresses,

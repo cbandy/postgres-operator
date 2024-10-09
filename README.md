@@ -1,9 +1,12 @@
 <h1 align="center">PGO: The Postgres Operator from Crunchy Data</h1>
 <p align="center">
-  <img width="150" src="./docs/static/logos/pgo.svg" alt="PGO: The Postgres Operator from Crunchy Data"/>
+  <img width="150" src="./img/CrunchyDataPrimaryIcon.png" alt="PGO: The Postgres Operator from Crunchy Data"/>
 </p>
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/CrunchyData/postgres-operator)](https://goreportcard.com/report/github.com/CrunchyData/postgres-operator)
+![GitHub Repo stars](https://img.shields.io/github/stars/CrunchyData/postgres-operator)
+[![License](https://img.shields.io/github/license/CrunchyData/postgres-operator)](LICENSE.md)
+[![Discord](https://img.shields.io/discord/1068276526740676708?label=discord&logo=discord)](https://discord.gg/a7vWKG8Ec9)
 
 # Production Postgres Made Easy
 
@@ -15,9 +18,13 @@ With conveniences like cloning Postgres clusters to using rolling updates to rol
 
 PGO is developed with many years of production experience in automating Postgres management on Kubernetes, providing a seamless cloud native Postgres solution to keep your data always available.
 
+Have questions or looking for help? [Join our Discord group](https://discord.gg/a7vWKG8Ec9).
+
 # Installation
 
-We recommend following our [Quickstart](https://access.crunchydata.com/documentation/postgres-operator/v5/quickstart/) for how to install and get up and running with PGO, the Postgres Operator from Crunchy Data. However, if you can't wait to try it out, here are some instructions to get Postgres up and running on Kubernetes:
+Crunchy Data makes PGO available as the orchestration behind Crunchy Postgres for Kubernetes. Crunchy Postgres for Kubernetes is the integrated product that includes PostgreSQL, PGO and a collection of PostgreSQL tools and extensions that includes the various [open source components listed in the documentation](https://access.crunchydata.com/documentation/postgres-operator/latest/references/components).
+
+We recommend following our [Quickstart](https://access.crunchydata.com/documentation/postgres-operator/v5/quickstart/) for how to install and get up and running. However, if you can't wait to try it out, here are some instructions to get Postgres up and running on Kubernetes:
 
 1. [Fork the Postgres Operator examples repository](https://github.com/CrunchyData/postgres-operator-examples/fork) and clone it to your host machine. For example:
 
@@ -27,9 +34,16 @@ git clone --depth 1 "git@github.com:${YOUR_GITHUB_UN}/postgres-operator-examples
 cd postgres-operator-examples
 ```
 
-2. Run `kubectl apply -k kustomize/install`
+2. Run the following commands
 
-For more information please read the [Quickstart](https://access.crunchydata.com/documentation/postgres-operator/v5/quickstart/) and [Tutorial](https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/).
+```sh
+kubectl apply -k kustomize/install/namespace
+kubectl apply --server-side -k kustomize/install/default
+```
+
+For more information please read the [Quickstart](https://access.crunchydata.com/documentation/postgres-operator/v5/quickstart/) and [Tutorial](https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/).
+
+These installation instructions provide the steps necessary to install PGO along with Crunchy Data's Postgres distribution, Crunchy Postgres, as Crunchy Postgres for Kubernetes. In doing so the installation downloads a series of container images from Crunchy Data's Developer Portal. For more information on the use of container images downloaded from the Crunchy Data Developer Portal or other third party sources, please see 'License and Terms' below. The installation and use of PGO outside of the use of Crunchy Postgres for Kubernetes will require modifications of these installation instructions and creation of the necessary PostgreSQL and related containers.  
 
 # Cloud Native Postgres for Kubernetes
 
@@ -108,30 +122,29 @@ PGO makes it easy to fully customize your Postgres cluster to tailor to your wor
 
 Deploy PGO to watch Postgres clusters in all of your [namespaces][k8s-namespaces], or [restrict which namespaces][single-namespace] you want PGO to manage Postgres clusters in!
 
-[backups]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/backups/
-[backups-s3]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/backups/#using-s3
-[backups-gcs]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/backups/#using-google-cloud-storage-gcs
-[backups-azure]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/backups/#using-azure-blob-storage
-[backups-multi]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/backups/#set-up-multiple-backup-repositories
-[backup-management]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/backup-management/
-[clone]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/disaster-recovery/#clone-a-postgres-cluster
-[customize-cluster]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/customize-cluster/
-[disaster-recovery]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/disaster-recovery/
-[high-availability]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/high-availability/
-[monitoring]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/monitoring/
+[backups]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/backups-disaster-recovery/backups
+[backups-s3]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/backups-disaster-recovery/backups#using-s3
+[backups-gcs]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/backups-disaster-recovery/backups#using-google-cloud-storage-gcs
+[backups-azure]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/backups-disaster-recovery/backups#using-azure-blob-storage
+[backups-multi]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/backups-disaster-recovery/backups#set-up-multiple-backup-repositories
+[backup-management]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/backups-disaster-recovery/backup-management
+[clone]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/backups-disaster-recovery/disaster-recovery#clone-a-postgres-cluster
+[customize-cluster]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/day-two/customize-cluster
+[disaster-recovery]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/backups-disaster-recovery/disaster-recovery
+[high-availability]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/day-two/high-availability/
+[monitoring]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/day-two/monitoring/
 [multiple-cluster]: https://access.crunchydata.com/documentation/postgres-operator/v5/architecture/disaster-recovery/#standby-cluster-overview
-[pool]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/connection-pooling/
-[provisioning]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/create-cluster/
-[resize-cluster]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/resize-cluster/
+[pool]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/basic-setup/connection-pooling/
+[provisioning]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/basic-setup/create-cluster/
+[resize-cluster]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/cluster-management/resize-cluster/
 [single-namespace]: https://access.crunchydata.com/documentation/postgres-operator/v5/installation/kustomize/#installation-mode
-[tls]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/customize-cluster/#customize-tls
-[update-postgres]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/update-cluster/
+[tls]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/day-two/customize-cluster#customize-tls
+[update-postgres]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/cluster-management/update-cluster
 [k8s-anti-affinity]: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#inter-pod-affinity-and-anti-affinity
 [k8s-namespaces]: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
 [k8s-nodes]: https://kubernetes.io/docs/concepts/architecture/nodes/
-
 [pgBackRest]: https://www.pgbackrest.org
-[pgBouncer]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorial/connection-pooling/
+[pgBouncer]: https://access.crunchydata.com/documentation/postgres-operator/v5/tutorials/basic-setup/connection-pooling/
 [pgMonitor]: https://github.com/CrunchyData/pgmonitor
 
 ## Included Components
@@ -176,8 +189,8 @@ For more information about which versions of the PostgreSQL Operator include whi
 
 PGO, the Postgres Operator from Crunchy Data, is tested on the following platforms:
 
-- Kubernetes 1.22-1.25
-- OpenShift 4.8-4.11
+- Kubernetes 1.25-1.30
+- OpenShift 4.12-4.16
 - Rancher
 - Google Kubernetes Engine (GKE), including Anthos
 - Amazon EKS
@@ -197,19 +210,19 @@ a set of contributing guidelines that you can review here:
 
 Once you are ready to submit a Pull Request, please ensure you do the following:
 
-1. Reviewing the [contributing guidelines](CONTRIBUTING.md) and ensure your
-that you have followed the commit message format, added testing where
-appropriate, documented your changes, etc.
+1. Reviewing the [contributing guidelines](CONTRIBUTING.md) and ensure
+   that you have followed the commit message format, added testing where
+   appropriate, documented your changes, etc.
 1. Open up a pull request based upon the guidelines. If you are adding a new
-feature, please open up the pull request on the `master` branch.
+   feature, please open up the pull request on the `master` branch.
 1. Please be as descriptive in your pull request as possible. If you are
-referencing an issue, please be sure to include the issue in your pull request
+   referencing an issue, please be sure to include the issue in your pull request
 
 ## Support
 
 If you believe you have found a bug or have a detailed feature request, please open a GitHub issue and follow the guidelines for submitting a bug.
 
-For general questions or community support, we welcome you to [join the PGO project community mailing list](https://groups.google.com/a/crunchydata.com/forum/#!forum/postgres-operator/join) at [https://groups.google.com/a/crunchydata.com/forum/#!forum/postgres-operator/join](https://groups.google.com/a/crunchydata.com/forum/#!forum/postgres-operator/join) and ask your question there.
+For general questions or community support, we welcome you to join our [community Discord](https://discord.gg/a7vWKG8Ec9) and ask your questions there.
 
 For other information, please visit the [Support](https://access.crunchydata.com/documentation/postgres-operator/latest/support/) section of the documentation.
 
@@ -222,7 +235,7 @@ PostgreSQL Operator, pleases see the [Official Project Documentation][documentat
 
 ## Past Versions
 
-Documentation for previous releases can be found at the [Crunchy Data Access Portal](https://access.crunchydata.com/documentation/)
+Documentation for previous releases can be found at the [Crunchy Data Access Portal](https://access.crunchydata.com/documentation/).
 
 # Releases
 
@@ -233,6 +246,12 @@ When a PostgreSQL Operator general availability (GA) release occurs, the contain
 
 The image rollout can occur over the course of several days.
 
-To stay up-to-date on when releases are made available in the [Crunchy Data Developer Portal](https://www.crunchydata.com/developers), please sign up for the [Crunchy Data Developer Program Newsletter](https://www.crunchydata.com/developers#email). You can also [join the PGO project community mailing list](https://groups.google.com/a/crunchydata.com/forum/#!forum/postgres-operator/join)
+To stay up-to-date on when releases are made available in the [Crunchy Data Developer Portal](https://www.crunchydata.com/developers), please sign up for the [Crunchy Data Developer Program Newsletter](https://www.crunchydata.com/developers#email). You can also [join the PGO project community discord](https://discord.gg/a7vWKG8Ec9)
+
+# FAQs, License and Terms
+
+For more information regarding PGO, the Postgres Operator project from Crunchy Data, and Crunchy Postgres for Kubernetes, please see the [frequently asked questions](https://access.crunchydata.com/documentation/postgres-operator/latest/faq). 
+
+The installation instructions provided in this repo are designed for the use of PGO along with Crunchy Data's Postgres distribution, Crunchy Postgres, as Crunchy Postgres for Kubernetes. The unmodified use of these installation instructions will result in downloading container images from Crunchy Data repositories - specifically the Crunchy Data Developer Portal. The use of container images downloaded from the Crunchy Data Developer Portal are subject to the [Crunchy Data Developer Program terms](https://www.crunchydata.com/developers/terms-of-use).  
 
 The PGO Postgres Operator project source code is available subject to the [Apache 2.0 license](LICENSE.md) with the PGO logo and branding assets covered by [our trademark guidelines](docs/static/logos/TRADEMARKS.md).

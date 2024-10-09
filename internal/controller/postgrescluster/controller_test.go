@@ -1,20 +1,6 @@
-//go:build envtest
-// +build envtest
-
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
@@ -24,15 +10,17 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
 	"github.com/pkg/errors"
+
 	"go.opentelemetry.io/otel"
 	"gotest.tools/v3/assert"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/version"
@@ -42,8 +30,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/registration"
 	"github.com/crunchydata/postgres-operator/internal/testing/require"
-	"github.com/crunchydata/postgres-operator/internal/util"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -101,6 +89,34 @@ func TestDeleteControlled(t *testing.T) {
 	})
 }
 
+var olmClusterYAML = `
+metadata:
+  name: olm
+spec:
+  postgresVersion: 13
+  image: postgres
+  instances:
+  - name: register-now
+    dataVolumeClaimSpec:
+      accessModes:
+      - "ReadWriteMany"
+      resources:
+        requests:
+          storage: 1Gi
+  backups:
+    pgbackrest:
+      image: pgbackrest
+      repos:
+      - name: repo1
+        volume:
+          volumeClaimSpec:
+            accessModes:
+            - "ReadWriteOnce"
+            resources:
+              requests:
+                storage: 1Gi
+`
+
 var _ = Describe("PostgresCluster Reconciler", func() {
 	var test struct {
 		Namespace  *corev1.Namespace
@@ -115,15 +131,13 @@ var _ = Describe("PostgresCluster Reconciler", func() {
 		test.Namespace.Name = "postgres-operator-test-" + rand.String(6)
 		Expect(suite.Client.Create(ctx, test.Namespace)).To(Succeed())
 
-		// Initialize the feature gate
-		Expect(util.AddAndSetFeatureGates("")).To(Succeed())
-
 		test.Recorder = record.NewFakeRecorder(100)
 		test.Recorder.IncludeObject = true
 
 		test.Reconciler.Client = suite.Client
 		test.Reconciler.Owner = "asdf"
 		test.Reconciler.Recorder = test.Recorder
+		test.Reconciler.Registration = nil
 		test.Reconciler.Tracer = otel.Tracer("asdf")
 	})
 
@@ -164,6 +178,49 @@ var _ = Describe("PostgresCluster Reconciler", func() {
 		return result
 	}
 
+	Context("Cluster with Registration Requirement, no token", func() {
+		var cluster *v1beta1.PostgresCluster
+
+		BeforeEach(func() {
+			test.Reconciler.Registration = registration.RegistrationFunc(
+				func(record.EventRecorder, client.Object, *[]metav1.Condition) bool {
+					return true
+				})
+
+			cluster = create(olmClusterYAML)
+			Expect(reconcile(cluster)).To(BeZero())
+		})
+
+		AfterEach(func() {
+			ctx := context.Background()
+
+			if cluster != nil {
+				Expect(client.IgnoreNotFound(
+					suite.Client.Delete(ctx, cluster),
+				)).To(Succeed())
+
+				// Remove finalizers, if any, so the namespace can terminate.
+				Expect(client.IgnoreNotFound(
+					suite.Client.Patch(ctx, cluster, client.RawPatch(
+						client.Merge.Type(), []byte(`{"metadata":{"finalizers":[]}}`))),
+				)).To(Succeed())
+			}
+		})
+
+		Specify("Cluster RegistrationRequired Status", func() {
+			existing := &v1beta1.PostgresCluster{}
+			Expect(suite.Client.Get(
+				context.Background(), client.ObjectKeyFromObject(cluster), existing,
+			)).To(Succeed())
+
+			Expect(meta.IsStatusConditionFalse(existing.Status.Conditions, v1beta1.Registered)).To(BeTrue())
+
+			event, ok := <-test.Recorder.Events
+			Expect(ok).To(BeTrue())
+			Expect(event).To(ContainSubstring("Register Soon"))
+		})
+	})
+
 	Context("Cluster", func() {
 		var cluster *v1beta1.PostgresCluster
 
@@ -173,6 +230,7 @@ metadata:
   name: carlos
 spec:
   postgresVersion: 13
+  image: postgres
   instances:
   - name: samba
     dataVolumeClaimSpec:
@@ -183,6 +241,7 @@ spec:
           storage: 1Gi
   backups:
     pgbackrest:
+      image: pgbackrest
       repos:
       - name: repo1
         volume:
@@ -376,6 +435,7 @@ metadata:
   name: carlos
 spec:
   postgresVersion: 13
+  image: postgres
   instances:
   - name: samba
     dataVolumeClaimSpec:
@@ -386,6 +446,7 @@ spec:
           storage: 1Gi
   backups:
     pgbackrest:
+      image: pgbackrest
       repos:
       - name: repo1
         volume:

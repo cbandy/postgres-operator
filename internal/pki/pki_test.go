@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package pki
 
@@ -479,7 +468,7 @@ func basicOpenSSLVerify(t *testing.T, openssl string, root, leaf Certificate) {
 	// - https://mail.python.org/pipermail/cryptography-dev/2016-August/000676.html
 
 	// TODO(cbandy): When we generate intermediate certificates, verify them
-	// idependently then bundle them with the root to verify the leaf.
+	// independently then bundle them with the root to verify the leaf.
 
 	verify(t, "-CAfile", rootFile, leafFile)
 	verify(t, "-CAfile", rootFile, "-purpose", "sslclient", leafFile)
@@ -490,6 +479,9 @@ func strictOpenSSLVerify(t *testing.T, openssl string, root, leaf Certificate) {
 	output, _ := exec.Command(openssl, "verify", "-help").CombinedOutput()
 	if !strings.Contains(string(output), "-x509_strict") {
 		t.Skip(`requires "-x509_strict" flag`)
+	}
+	if !strings.Contains(string(output), "-no-CAfile") {
+		t.Skip(`requires a flag to ignore system certificates`)
 	}
 
 	verify := func(t testing.TB, args ...string) {
@@ -522,7 +514,7 @@ func strictOpenSSLVerify(t *testing.T, openssl string, root, leaf Certificate) {
 	assert.NilError(t, os.WriteFile(leafFile, leafBytes, 0o600))
 
 	// TODO(cbandy): When we generate intermediate certificates, verify them
-	// idependently then pass them via "-untrusted" to verify the leaf.
+	// independently then pass them via "-untrusted" to verify the leaf.
 
 	verify(t, "-trusted", rootFile, leafFile)
 	verify(t, "-trusted", rootFile, "-purpose", "sslclient", leafFile)
