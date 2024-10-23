@@ -1,19 +1,8 @@
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package password
-
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
 
 import (
 	"crypto/hmac"
@@ -37,7 +26,7 @@ import (
 //
 // where:
 // DIGEST = SCRAM-SHA-256 (only value for now in PostgreSQL)
-// ITERATIONS = the number of iteratiosn to use for PBKDF2
+// ITERATIONS = the number of iterations to use for PBKDF2
 // SALT = the salt used as part of the PBKDF2, stored in base64
 // STORED_KEY = the hash of the client key, stored in base64
 // SERVER_KEY = the hash of the server key
@@ -179,7 +168,7 @@ func (s *SCRAMPassword) saslPrep() string {
 
 	// perform SASLprep on the password. if the SASLprep fails or returns an
 	// empty string, return the original password
-	// Otherwise return the clean pasword
+	// Otherwise return the clean password
 	cleanedPassword, err := stringprep.SASLprep.Prepare(s.password)
 	if cleanedPassword == "" || err != nil {
 		return s.password

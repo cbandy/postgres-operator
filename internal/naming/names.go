@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package naming
 
@@ -260,6 +249,24 @@ func ClusterReplicaService(cluster *v1beta1.PostgresCluster) metav1.ObjectMeta {
 	}
 }
 
+// ClusterDedicatedSnapshotVolume returns the ObjectMeta for the dedicated Snapshot
+// volume for a cluster.
+func ClusterDedicatedSnapshotVolume(cluster *v1beta1.PostgresCluster) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Namespace: cluster.GetNamespace(),
+		Name:      cluster.GetName() + "-snapshot",
+	}
+}
+
+// ClusterVolumeSnapshot returns the ObjectMeta, including a random name, for a
+// new pgdata VolumeSnapshot.
+func ClusterVolumeSnapshot(cluster *v1beta1.PostgresCluster) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Namespace: cluster.Namespace,
+		Name:      cluster.Name + "-pgdata-snapshot-" + rand.String(4),
+	}
+}
+
 // GenerateInstance returns a random name for a member of cluster and set.
 func GenerateInstance(
 	cluster *v1beta1.PostgresCluster, set *v1beta1.PostgresInstanceSetSpec,
@@ -325,6 +332,17 @@ func InstancePostgresDataVolume(instance *appsv1.StatefulSet) metav1.ObjectMeta 
 	}
 }
 
+// InstanceTablespaceDataVolume returns the ObjectMeta for the tablespace data
+// volume for instance.
+func InstanceTablespaceDataVolume(instance *appsv1.StatefulSet, tablespaceName string) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Namespace: instance.GetNamespace(),
+		Name: instance.GetName() +
+			"-" + tablespaceName +
+			"-tablespace",
+	}
+}
+
 // InstancePostgresWALVolume returns the ObjectMeta for the PostgreSQL WAL
 // volume for instance.
 func InstancePostgresWALVolume(instance *appsv1.StatefulSet) metav1.ObjectMeta {
@@ -350,6 +368,16 @@ func ExporterWebConfigMap(cluster *v1beta1.PostgresCluster) metav1.ObjectMeta {
 	return metav1.ObjectMeta{
 		Namespace: cluster.Namespace,
 		Name:      cluster.Name + "-exporter-web-config",
+	}
+}
+
+// ExporterQueriesConfigMap returns ObjectMeta necessary to lookup and create the
+// exporter queries configmap. This configmap is used to pass the default queries
+// to the exporter.
+func ExporterQueriesConfigMap(cluster *v1beta1.PostgresCluster) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Namespace: cluster.Namespace,
+		Name:      cluster.Name + "-exporter-queries-config",
 	}
 }
 
@@ -544,6 +572,15 @@ func MovePGBackRestRepoDirJob(cluster *v1beta1.PostgresCluster) metav1.ObjectMet
 	return metav1.ObjectMeta{
 		Namespace: cluster.GetNamespace(),
 		Name:      cluster.Name + "-move-pgbackrest-repo-dir",
+	}
+}
+
+// StandalonePGAdmin returns the ObjectMeta necessary to lookup the ConfigMap,
+// Service, StatefulSet, or Volume for the cluster's pgAdmin user interface.
+func StandalonePGAdmin(pgadmin *v1beta1.PGAdmin) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Namespace: pgadmin.Namespace,
+		Name:      fmt.Sprintf("pgadmin-%s", pgadmin.UID),
 	}
 }
 

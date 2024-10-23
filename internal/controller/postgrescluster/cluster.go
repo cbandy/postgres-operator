@@ -1,22 +1,12 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/pkg/errors"
@@ -25,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
 	"github.com/crunchydata/postgres-operator/internal/patroni"
 	"github.com/crunchydata/postgres-operator/internal/pki"
@@ -32,7 +23,7 @@ import (
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="configmaps",verbs={create,patch}
 
 // reconcileClusterConfigMap writes the ConfigMap that contains generated
 // files (etc) that apply to the entire cluster.
@@ -62,7 +53,7 @@ func (r *Reconciler) reconcileClusterConfigMap(
 	return clusterConfigMap, err
 }
 
-// +kubebuilder:rbac:groups="",resources=services,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="services",verbs={create,patch}
 
 // reconcileClusterPodService writes the Service that can provide stable DNS
 // names to Pods related to cluster.
@@ -199,33 +190,66 @@ func (r *Reconciler) generateClusterReplicaService(
 	service := &corev1.Service{ObjectMeta: naming.ClusterReplicaService(cluster)}
 	service.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
 
-	service.Annotations = naming.Merge(
-		cluster.Spec.Metadata.GetAnnotationsOrNil())
+	service.Annotations = cluster.Spec.Metadata.GetAnnotationsOrNil()
+	service.Labels = cluster.Spec.Metadata.GetLabelsOrNil()
+
+	if spec := cluster.Spec.ReplicaService; spec != nil {
+		service.Annotations = naming.Merge(service.Annotations,
+			spec.Metadata.GetAnnotationsOrNil())
+		service.Labels = naming.Merge(service.Labels,
+			spec.Metadata.GetLabelsOrNil())
+	}
+
+	// add our labels last so they aren't overwritten
 	service.Labels = naming.Merge(
-		cluster.Spec.Metadata.GetLabelsOrNil(),
+		service.Labels,
 		map[string]string{
 			naming.LabelCluster: cluster.Name,
 			naming.LabelRole:    naming.RoleReplica,
 		})
 
-	// Allocate an IP address and let Kubernetes manage the Endpoints by
-	// selecting Pods with the Patroni replica role.
-	// - https://docs.k8s.io/concepts/services-networking/service/#defining-a-service
-	service.Spec.Type = corev1.ServiceTypeClusterIP
-	service.Spec.Selector = map[string]string{
-		naming.LabelCluster: cluster.Name,
-		naming.LabelRole:    naming.RolePatroniReplica,
-	}
-
 	// The TargetPort must be the name (not the number) of the PostgreSQL
 	// ContainerPort. This name allows the port number to differ between Pods,
 	// which can happen during a rolling update.
-	service.Spec.Ports = []corev1.ServicePort{{
+	servicePort := corev1.ServicePort{
 		Name:       naming.PortPostgreSQL,
 		Port:       *cluster.Spec.Port,
 		Protocol:   corev1.ProtocolTCP,
 		TargetPort: intstr.FromString(naming.PortPostgreSQL),
-	}}
+	}
+
+	// Default to a service type of ClusterIP
+	service.Spec.Type = corev1.ServiceTypeClusterIP
+
+	// Check user provided spec for a specified type
+	if spec := cluster.Spec.ReplicaService; spec != nil {
+		service.Spec.Type = corev1.ServiceType(spec.Type)
+		if spec.NodePort != nil {
+			if service.Spec.Type == corev1.ServiceTypeClusterIP {
+				// The NodePort can only be set when the Service type is NodePort or
+				// LoadBalancer. However, due to a known issue prior to Kubernetes
+				// 1.20, we clear these errors during our apply. To preserve the
+				// appropriate behavior, we log an Event and return an error.
+				// TODO(tjmoore4): Once Validation Rules are available, this check
+				// and event could potentially be removed in favor of that validation
+				r.Recorder.Eventf(cluster, corev1.EventTypeWarning, "MisconfiguredClusterIP",
+					"NodePort cannot be set with type ClusterIP on Service %q", service.Name)
+				return nil, fmt.Errorf("NodePort cannot be set with type ClusterIP on Service %q", service.Name)
+			}
+			servicePort.NodePort = *spec.NodePort
+		}
+		service.Spec.ExternalTrafficPolicy = initialize.FromPointer(spec.ExternalTrafficPolicy)
+		service.Spec.InternalTrafficPolicy = spec.InternalTrafficPolicy
+	}
+	service.Spec.Ports = []corev1.ServicePort{servicePort}
+
+	// Allocate an IP address and let Kubernetes manage the Endpoints by
+	// selecting Pods with the Patroni replica role.
+	// - https://docs.k8s.io/concepts/services-networking/service/#defining-a-service
+	service.Spec.Selector = map[string]string{
+		naming.LabelCluster: cluster.Name,
+		naming.LabelRole:    naming.RolePatroniReplica,
+	}
 
 	err := errors.WithStack(r.setControllerReference(cluster, service))
 
@@ -238,13 +262,13 @@ func (r *Reconciler) generateClusterReplicaService(
 // replica instances.
 func (r *Reconciler) reconcileClusterReplicaService(
 	ctx context.Context, cluster *v1beta1.PostgresCluster,
-) error {
+) (*corev1.Service, error) {
 	service, err := r.generateClusterReplicaService(cluster)
 
 	if err == nil {
 		err = errors.WithStack(r.apply(ctx, service))
 	}
-	return err
+	return service, err
 }
 
 // reconcileDataSource is responsible for reconciling the data source for a PostgreSQL cluster.
@@ -258,7 +282,9 @@ func (r *Reconciler) reconcileClusterReplicaService(
 func (r *Reconciler) reconcileDataSource(ctx context.Context,
 	cluster *v1beta1.PostgresCluster, observed *observedInstances,
 	clusterVolumes []corev1.PersistentVolumeClaim,
-	rootCA *pki.RootCertificateAuthority) (bool, error) {
+	rootCA *pki.RootCertificateAuthority,
+	backupsSpecFound bool,
+) (bool, error) {
 
 	// a hash func to hash the pgBackRest restore options
 	hashFunc := func(jobConfigs []string) (string, error) {
@@ -381,7 +407,8 @@ func (r *Reconciler) reconcileDataSource(ctx context.Context,
 	switch {
 	case dataSource != nil:
 		if err := r.reconcilePostgresClusterDataSource(ctx, cluster, dataSource,
-			configHash, clusterVolumes, rootCA); err != nil {
+			configHash, clusterVolumes, rootCA,
+			backupsSpecFound); err != nil {
 			return true, err
 		}
 	case cloudDataSource != nil:

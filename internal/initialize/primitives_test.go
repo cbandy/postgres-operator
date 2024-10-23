@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package initialize_test
 
@@ -35,25 +24,32 @@ func TestBool(t *testing.T) {
 	}
 }
 
-func TestByteMap(t *testing.T) {
-	// Ignores nil pointer.
-	initialize.ByteMap(nil)
+func TestFromPointer(t *testing.T) {
+	t.Run("bool", func(t *testing.T) {
+		assert.Equal(t, initialize.FromPointer((*bool)(nil)), false)
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer(false)), false)
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer(true)), true)
+	})
 
-	var m map[string][]byte
+	t.Run("int32", func(t *testing.T) {
+		assert.Equal(t, initialize.FromPointer((*int32)(nil)), int32(0))
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer(int32(0))), int32(0))
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer(int32(-99))), int32(-99))
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer(int32(42))), int32(42))
+	})
 
-	// Starts nil.
-	assert.Assert(t, m == nil)
+	t.Run("int64", func(t *testing.T) {
+		assert.Equal(t, initialize.FromPointer((*int64)(nil)), int64(0))
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer(int64(0))), int64(0))
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer(int64(-99))), int64(-99))
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer(int64(42))), int64(42))
+	})
 
-	// Gets initialized.
-	initialize.ByteMap(&m)
-	assert.DeepEqual(t, m, map[string][]byte{})
-
-	// Now writable.
-	m["x"] = []byte("y")
-
-	// Doesn't overwrite.
-	initialize.ByteMap(&m)
-	assert.DeepEqual(t, m, map[string][]byte{"x": []byte("y")})
+	t.Run("string", func(t *testing.T) {
+		assert.Equal(t, initialize.FromPointer((*string)(nil)), "")
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer("")), "")
+		assert.Equal(t, initialize.FromPointer(initialize.Pointer("sup")), "sup")
+	})
 }
 
 func TestInt32(t *testing.T) {
@@ -90,6 +86,110 @@ func TestInt64(t *testing.T) {
 	}
 }
 
+func TestMap(t *testing.T) {
+	t.Run("map[string][]byte", func(t *testing.T) {
+		// Ignores nil pointer.
+		initialize.Map((*map[string][]byte)(nil))
+
+		var m map[string][]byte
+
+		// Starts nil.
+		assert.Assert(t, m == nil)
+
+		// Gets initialized.
+		initialize.Map(&m)
+		assert.DeepEqual(t, m, map[string][]byte{})
+
+		// Now writable.
+		m["x"] = []byte("y")
+
+		// Doesn't overwrite.
+		initialize.Map(&m)
+		assert.DeepEqual(t, m, map[string][]byte{"x": []byte("y")})
+	})
+
+	t.Run("map[string]string", func(t *testing.T) {
+		// Ignores nil pointer.
+		initialize.Map((*map[string]string)(nil))
+
+		var m map[string]string
+
+		// Starts nil.
+		assert.Assert(t, m == nil)
+
+		// Gets initialized.
+		initialize.Map(&m)
+		assert.DeepEqual(t, m, map[string]string{})
+
+		// Now writable.
+		m["x"] = "y"
+
+		// Doesn't overwrite.
+		initialize.Map(&m)
+		assert.DeepEqual(t, m, map[string]string{"x": "y"})
+	})
+}
+
+func TestPointer(t *testing.T) {
+	t.Run("bool", func(t *testing.T) {
+		n := initialize.Pointer(false)
+		if assert.Check(t, n != nil) {
+			assert.Equal(t, *n, false)
+		}
+
+		y := initialize.Pointer(true)
+		if assert.Check(t, y != nil) {
+			assert.Equal(t, *y, true)
+		}
+	})
+
+	t.Run("int32", func(t *testing.T) {
+		z := initialize.Pointer(int32(0))
+		if assert.Check(t, z != nil) {
+			assert.Equal(t, *z, int32(0))
+		}
+
+		n := initialize.Pointer(int32(-99))
+		if assert.Check(t, n != nil) {
+			assert.Equal(t, *n, int32(-99))
+		}
+
+		p := initialize.Pointer(int32(42))
+		if assert.Check(t, p != nil) {
+			assert.Equal(t, *p, int32(42))
+		}
+	})
+
+	t.Run("int64", func(t *testing.T) {
+		z := initialize.Pointer(int64(0))
+		if assert.Check(t, z != nil) {
+			assert.Equal(t, *z, int64(0))
+		}
+
+		n := initialize.Pointer(int64(-99))
+		if assert.Check(t, n != nil) {
+			assert.Equal(t, *n, int64(-99))
+		}
+
+		p := initialize.Pointer(int64(42))
+		if assert.Check(t, p != nil) {
+			assert.Equal(t, *p, int64(42))
+		}
+	})
+
+	t.Run("string", func(t *testing.T) {
+		z := initialize.Pointer("")
+		if assert.Check(t, z != nil) {
+			assert.Equal(t, *z, "")
+		}
+
+		n := initialize.Pointer("sup")
+		if assert.Check(t, n != nil) {
+			assert.Equal(t, *n, "sup")
+		}
+	})
+}
+
 func TestString(t *testing.T) {
 	z := initialize.String("")
 	if assert.Check(t, z != nil) {
@@ -100,25 +200,4 @@ func TestString(t *testing.T) {
 	if assert.Check(t, n != nil) {
 		assert.Equal(t, *n, "sup")
 	}
-}
-
-func TestStringMap(t *testing.T) {
-	// Ignores nil pointer.
-	initialize.StringMap(nil)
-
-	var m map[string]string
-
-	// Starts nil.
-	assert.Assert(t, m == nil)
-
-	// Gets initialized.
-	initialize.StringMap(&m)
-	assert.DeepEqual(t, m, map[string]string{})
-
-	// Now writable.
-	m["x"] = "y"
-
-	// Doesn't overwrite.
-	initialize.StringMap(&m)
-	assert.DeepEqual(t, m, map[string]string{"x": "y"})
 }

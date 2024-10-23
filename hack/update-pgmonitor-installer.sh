@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright 2022 Crunchy Data Solutions, Inc.
+# Copyright 2022 - 2024 Crunchy Data Solutions, Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -19,7 +19,7 @@
 directory=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
 # The pgMonitor tag to use to refresh the current monitoring installer
-pgmonitor_tag=v4.8.0
+pgmonitor_tag=v4.8.1
 
 # Set the directory for the monitoring Kustomize installer
 pgo_examples_monitoring_dir="${directory}/../../postgres-operator-examples/kustomize/monitoring"

@@ -1,22 +1,12 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgres
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -175,7 +165,9 @@ func TestBashRecreateDirectory(t *testing.T) {
 	cmd.Args = append(cmd.Args, "-ceu", "--",
 		bashRecreateDirectory+` recreate "$@"`, "-",
 		filepath.Join(dir, "d"), "0740")
-
+	// The assertion below expects alphabetically sorted filenames.
+	// Set an empty environment to always use the default/standard locale.
+	cmd.Env = []string{}
 	output, err := cmd.CombinedOutput()
 	assert.NilError(t, err, string(output))
 	assert.Assert(t, cmp.Regexp(`^`+
@@ -207,9 +199,11 @@ func TestBashRecreateDirectory(t *testing.T) {
 }
 
 func TestBashSafeLink(t *testing.T) {
-	// macOS lacks `realpath` which is part of GNU coreutils.
-	if _, err := exec.LookPath("realpath"); err != nil {
-		t.Skip(`requires "realpath" executable`)
+	// macOS `mv` takes different arguments than GNU coreutils.
+	if output, err := exec.Command("mv", "--help").CombinedOutput(); err != nil {
+		t.Skip(`requires "mv" executable`)
+	} else if !strings.Contains(string(output), "no-target-directory") {
+		t.Skip(`requires "mv" that overwrites a directory symlink`)
 	}
 
 	// execute calls the bash function with args.
@@ -461,12 +455,14 @@ func TestBashSafeLink(t *testing.T) {
 
 func TestStartupCommand(t *testing.T) {
 	shellcheck := require.ShellCheck(t)
+	t.Parallel()
 
 	cluster := new(v1beta1.PostgresCluster)
 	cluster.Spec.PostgresVersion = 13
 	instance := new(v1beta1.PostgresInstanceSetSpec)
 
-	command := startupCommand(cluster, instance)
+	ctx := context.Background()
+	command := startupCommand(ctx, cluster, instance)
 
 	// Expect a bash command with an inline script.
 	assert.DeepEqual(t, command[:3], []string{"bash", "-ceu", "--"})
@@ -488,5 +484,25 @@ func TestStartupCommand(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Assert(t, strings.HasPrefix(string(b), `|`),
 			"expected literal block scalar, got:\n%s", b)
+	})
+
+	t.Run("EnableTDE", func(t *testing.T) {
+
+		cluster.Spec.Patroni = &v1beta1.PatroniSpec{
+			DynamicConfiguration: map[string]any{
+				"postgresql": map[string]any{
+					"parameters": map[string]any{
+						"encryption_key_command": "echo test",
+					},
+				},
+			},
+		}
+		command := startupCommand(ctx, cluster, instance)
+		assert.Assert(t, len(command) > 3)
+		assert.Assert(t, strings.Contains(command[3], `cat << "EOF" > /tmp/pg_rewind_tde.sh
+#!/bin/sh
+pg_rewind -K "$(postgres -C encryption_key_command)" "$@"
+EOF
+chmod +x /tmp/pg_rewind_tde.sh`))
 	})
 }

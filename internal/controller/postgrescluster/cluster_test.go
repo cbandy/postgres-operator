@@ -1,22 +1,8 @@
-//go:build envtest
-// +build envtest
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
-
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
 
 import (
 	"context"
@@ -39,6 +25,7 @@ import (
 
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/testing/cmp"
 	"github.com/crunchydata/postgres-operator/internal/testing/require"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
@@ -614,11 +601,11 @@ func TestGenerateClusterPrimaryService(t *testing.T) {
 	assert.ErrorContains(t, err, "not implemented")
 
 	alwaysExpect := func(t testing.TB, service *corev1.Service, endpoints *corev1.Endpoints) {
-		assert.Assert(t, marshalMatches(service.TypeMeta, `
+		assert.Assert(t, cmp.MarshalMatches(service.TypeMeta, `
 apiVersion: v1
 kind: Service
 		`))
-		assert.Assert(t, marshalMatches(service.ObjectMeta, `
+		assert.Assert(t, cmp.MarshalMatches(service.ObjectMeta, `
 creationTimestamp: null
 labels:
   postgres-operator.crunchydata.com/cluster: pg5
@@ -633,7 +620,7 @@ ownerReferences:
   name: pg5
   uid: ""
 		`))
-		assert.Assert(t, marshalMatches(service.Spec.Ports, `
+		assert.Assert(t, cmp.MarshalMatches(service.Spec.Ports, `
 - name: postgres
   port: 2600
   protocol: TCP
@@ -644,7 +631,7 @@ ownerReferences:
 		assert.Assert(t, service.Spec.Selector == nil,
 			"got %v", service.Spec.Selector)
 
-		assert.Assert(t, marshalMatches(endpoints, `
+		assert.Assert(t, cmp.MarshalMatches(endpoints, `
 apiVersion: v1
 kind: Endpoints
 metadata:
@@ -732,11 +719,12 @@ func TestGenerateClusterReplicaServiceIntent(t *testing.T) {
 	service, err := reconciler.generateClusterReplicaService(cluster)
 	assert.NilError(t, err)
 
-	assert.Assert(t, marshalMatches(service.TypeMeta, `
+	alwaysExpect := func(t testing.TB, service *corev1.Service) {
+		assert.Assert(t, cmp.MarshalMatches(service.TypeMeta, `
 apiVersion: v1
 kind: Service
-	`))
-	assert.Assert(t, marshalMatches(service.ObjectMeta, `
+		`))
+		assert.Assert(t, cmp.MarshalMatches(service.ObjectMeta, `
 creationTimestamp: null
 labels:
   postgres-operator.crunchydata.com/cluster: pg2
@@ -750,8 +738,11 @@ ownerReferences:
   kind: PostgresCluster
   name: pg2
   uid: ""
-	`))
-	assert.Assert(t, marshalMatches(service.Spec, `
+		`))
+	}
+
+	alwaysExpect(t, service)
+	assert.Assert(t, cmp.MarshalMatches(service.Spec, `
 ports:
 - name: postgres
   port: 9876
@@ -762,6 +753,39 @@ selector:
   postgres-operator.crunchydata.com/role: replica
 type: ClusterIP
 	`))
+
+	types := []struct {
+		Type   string
+		Expect func(testing.TB, *corev1.Service)
+	}{
+		{Type: "ClusterIP", Expect: func(t testing.TB, service *corev1.Service) {
+			assert.Equal(t, service.Spec.Type, corev1.ServiceTypeClusterIP)
+		}},
+		{Type: "NodePort", Expect: func(t testing.TB, service *corev1.Service) {
+			assert.Equal(t, service.Spec.Type, corev1.ServiceTypeNodePort)
+		}},
+		{Type: "LoadBalancer", Expect: func(t testing.TB, service *corev1.Service) {
+			assert.Equal(t, service.Spec.Type, corev1.ServiceTypeLoadBalancer)
+		}},
+	}
+
+	for _, test := range types {
+		t.Run(test.Type, func(t *testing.T) {
+			cluster := cluster.DeepCopy()
+			cluster.Spec.ReplicaService = &v1beta1.ServiceSpec{Type: test.Type}
+
+			service, err := reconciler.generateClusterReplicaService(cluster)
+			assert.NilError(t, err)
+			alwaysExpect(t, service)
+			test.Expect(t, service)
+			assert.Assert(t, cmp.MarshalMatches(service.Spec.Ports, `
+- name: postgres
+  port: 9876
+  protocol: TCP
+  targetPort: postgres
+	`))
+		})
+	}
 
 	t.Run("AnnotationsLabels", func(t *testing.T) {
 		cluster := cluster.DeepCopy()
@@ -774,19 +798,19 @@ type: ClusterIP
 		assert.NilError(t, err)
 
 		// Annotations present in the metadata.
-		assert.Assert(t, marshalMatches(service.ObjectMeta.Annotations, `
+		assert.Assert(t, cmp.MarshalMatches(service.ObjectMeta.Annotations, `
 some: note
 		`))
 
 		// Labels present in the metadata.
-		assert.Assert(t, marshalMatches(service.ObjectMeta.Labels, `
+		assert.Assert(t, cmp.MarshalMatches(service.ObjectMeta.Labels, `
 happy: label
 postgres-operator.crunchydata.com/cluster: pg2
 postgres-operator.crunchydata.com/role: replica
 		`))
 
 		// Labels not in the selector.
-		assert.Assert(t, marshalMatches(service.Spec.Selector, `
+		assert.Assert(t, cmp.MarshalMatches(service.Spec.Selector, `
 postgres-operator.crunchydata.com/cluster: pg2
 postgres-operator.crunchydata.com/role: replica
 		`))

@@ -1,31 +1,14 @@
-ARG BASE_IMAGE_OS
-ARG DOCKERBASEREGISTRY
-FROM ${DOCKERBASEREGISTRY}${BASE_IMAGE_OS}
-
-ARG PGVERSION
-ARG PG_FULL
-ARG PACKAGER
-ARG RELVER
-
-MAINTAINER info@crunchydata.com
-
-LABEL vendor="Crunchy Data" \
-	url="https://crunchydata.com" \
-	release="${RELVER}" \
-	postgresql.version.major="${PGVERSION}" \
-	postgresql.version="${PG_FULL}" \
-	org.opencontainers.image.vendor="Crunchy Data" \
-	io.openshift.tags="postgresql,postgres,sql,nosql,crunchy" \
-	io.k8s.description="Trusted open source PostgreSQL-as-a-Service" \
-	name="postgres-operator" \
-	summary="Crunchy PostgreSQL Operator" \
-	description="Crunchy PostgreSQL Operator"
+FROM registry.access.redhat.com/ubi8/ubi-minimal
 
 COPY licenses /licenses
 
-RUN ${PACKAGER} -y update && ${PACKAGER} -y clean all
+COPY bin/postgres-operator /usr/local/bin
 
-ADD bin/postgres-operator /usr/local/bin
+RUN mkdir -p /opt/crunchy/conf
+
+COPY hack/tools/queries /opt/crunchy/conf
+
+RUN chgrp -R 0 /opt/crunchy/conf && chmod -R g=u opt/crunchy/conf
 
 USER 2
 

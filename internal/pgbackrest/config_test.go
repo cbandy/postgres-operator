@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package pgbackrest
 
@@ -131,6 +120,7 @@ pg1-socket-path = /tmp/postgres
 # Your changes will not be saved.
 
 [global]
+archive-async = y
 log-path = /pgdata/pgbackrest/log
 repo1-host = repo-hostname-0.pod-service-name.test-ns.svc.`+domain+`
 repo1-host-ca-file = /etc/pgbackrest/conf.d/~postgres-operator/tls-ca.crt
@@ -151,6 +141,7 @@ repo4-s3-bucket = s-bucket
 repo4-s3-endpoint = endpoint-s
 repo4-s3-region = earth
 repo4-type = s3
+spool-path = /pgdata/pgbackrest-spool
 
 [db]
 pg1-path = /pgdata/pg12
@@ -203,6 +194,54 @@ pg1-socket-path = /tmp/postgres
 			"postgres-operator.crunchydata.com/pgbackrest":        "",
 			"postgres-operator.crunchydata.com/pgbackrest-config": "",
 		})
+	})
+
+	t.Run("EnabledTDE", func(t *testing.T) {
+		cluster := cluster.DeepCopy()
+		cluster.Spec.Patroni = &v1beta1.PatroniSpec{
+			DynamicConfiguration: map[string]any{
+				"postgresql": map[string]any{
+					"parameters": map[string]any{
+						"encryption_key_command": "echo test",
+					},
+				},
+			},
+		}
+
+		configmap := CreatePGBackRestConfigMapIntent(cluster,
+			"", "number", "pod-service-name", "test-ns",
+			[]string{"some-instance"})
+
+		assert.Assert(t,
+			strings.Contains(configmap.Data["pgbackrest_instance.conf"],
+				"archive-header-check = n"))
+		assert.Assert(t,
+			strings.Contains(configmap.Data["pgbackrest_instance.conf"],
+				"page-header-check = n"))
+		assert.Assert(t,
+			strings.Contains(configmap.Data["pgbackrest_instance.conf"],
+				"pg-version-force"))
+
+		cluster.Spec.Backups.PGBackRest.Repos = []v1beta1.PGBackRestRepo{
+			{
+				Name:   "repo1",
+				Volume: &v1beta1.RepoPVC{},
+			},
+		}
+
+		configmap = CreatePGBackRestConfigMapIntent(cluster,
+			"repo1", "number", "pod-service-name", "test-ns",
+			[]string{"some-instance"})
+
+		assert.Assert(t,
+			strings.Contains(configmap.Data["pgbackrest_repo.conf"],
+				"archive-header-check = n"))
+		assert.Assert(t,
+			strings.Contains(configmap.Data["pgbackrest_repo.conf"],
+				"page-header-check = n"))
+		assert.Assert(t,
+			strings.Contains(configmap.Data["pgbackrest_repo.conf"],
+				"pg-version-force"))
 	})
 }
 
@@ -297,7 +336,7 @@ func TestRestoreCommand(t *testing.T) {
 	opts := []string{
 		"--stanza=" + DefaultStanzaName, "--pg1-path=" + pgdata,
 		"--repo=1"}
-	command := RestoreCommand(pgdata, strings.Join(opts, " "))
+	command := RestoreCommand(pgdata, "try", "", nil, strings.Join(opts, " "))
 
 	assert.DeepEqual(t, command[:3], []string{"bash", "-ceu", "--"})
 	assert.Assert(t, len(command) > 3)
@@ -312,7 +351,45 @@ func TestRestoreCommand(t *testing.T) {
 }
 
 func TestRestoreCommandPrettyYAML(t *testing.T) {
-	b, err := yaml.Marshal(RestoreCommand("/dir", "--options"))
+	b, err := yaml.Marshal(RestoreCommand("/dir", "try", "", nil, "--options"))
+
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), "\n- |"),
+		"expected literal block scalar, got:\n%s", b)
+}
+
+func TestRestoreCommandTDE(t *testing.T) {
+	b, err := yaml.Marshal(RestoreCommand("/dir", "try", "echo testValue", nil, "--options"))
+
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), "encryption_key_command = 'echo testValue'"),
+		"expected encryption_key_command setting, got:\n%s", b)
+}
+
+func TestDedicatedSnapshotVolumeRestoreCommand(t *testing.T) {
+	shellcheck := require.ShellCheck(t)
+
+	pgdata := "/pgdata/pg13"
+	opts := []string{
+		"--stanza=" + DefaultStanzaName, "--pg1-path=" + pgdata,
+		"--repo=1"}
+	command := DedicatedSnapshotVolumeRestoreCommand(pgdata, strings.Join(opts, " "))
+
+	assert.DeepEqual(t, command[:3], []string{"bash", "-ceu", "--"})
+	assert.Assert(t, len(command) > 3)
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "script.bash")
+	assert.NilError(t, os.WriteFile(file, []byte(command[3]), 0o600))
+
+	cmd := exec.Command(shellcheck, "--enable=all", file)
+	output, err := cmd.CombinedOutput()
+	assert.NilError(t, err, "%q\n%s", cmd.Args, output)
+}
+
+func TestDedicatedSnapshotVolumeRestoreCommandPrettyYAML(t *testing.T) {
+	b, err := yaml.Marshal(DedicatedSnapshotVolumeRestoreCommand("/dir", "--options"))
+
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(b), "\n- |"),
 		"expected literal block scalar, got:\n%s", b)

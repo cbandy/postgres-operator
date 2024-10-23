@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgres
 
@@ -23,9 +12,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/crunchydata/postgres-operator/internal/feature"
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
-	"github.com/crunchydata/postgres-operator/internal/util"
+	"github.com/crunchydata/postgres-operator/internal/testing/cmp"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -59,12 +49,20 @@ func TestDownwardAPIVolumeMount(t *testing.T) {
 	})
 }
 
+func TestTablespaceVolumeMount(t *testing.T) {
+	mount := TablespaceVolumeMount("trial")
+
+	assert.DeepEqual(t, mount, corev1.VolumeMount{
+		Name:      "tablespace-trial",
+		MountPath: "/tablespaces/trial",
+		ReadOnly:  false,
+	})
+}
+
 func TestInstancePod(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
-
-	// Initialize the feature gate
-	assert.NilError(t, util.AddAndSetFeatureGates(""))
-
 	cluster := new(v1beta1.PostgresCluster)
 	cluster.Default()
 	cluster.Spec.ImagePullPolicy = corev1.PullAlways
@@ -118,9 +116,9 @@ func TestInstancePod(t *testing.T) {
 	// without WAL volume nor WAL volume spec
 	pod := new(corev1.PodSpec)
 	InstancePod(ctx, cluster, instance,
-		serverSecretProjection, clientSecretProjection, dataVolume, nil, pod)
+		serverSecretProjection, clientSecretProjection, dataVolume, nil, nil, pod)
 
-	assert.Assert(t, marshalMatches(pod, `
+	assert.Assert(t, cmp.MarshalMatches(pod, `
 containers:
 - env:
   - name: PGDATA
@@ -133,6 +131,8 @@ containers:
     value: /etc/postgres/krb5.conf
   - name: KRB5RCACHEDIR
     value: /tmp
+  - name: LDAPTLS_CACERT
+    value: /etc/postgres/ldap/ca.crt
   imagePullPolicy: Always
   name: database
   ports:
@@ -150,6 +150,8 @@ containers:
     privileged: false
     readOnlyRootFilesystem: true
     runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   volumeMounts:
   - mountPath: /pgconf/tls
     name: cert-volume
@@ -165,15 +167,38 @@ containers:
   - --
   - |-
     monitor() {
+    # Parameters for curl when managing autogrow annotation.
+    APISERVER="https://kubernetes.default.svc"
+    SERVICEACCOUNT="/var/run/secrets/kubernetes.io/serviceaccount"
+    NAMESPACE=$(cat ${SERVICEACCOUNT}/namespace)
+    TOKEN=$(cat ${SERVICEACCOUNT}/token)
+    CACERT=${SERVICEACCOUNT}/ca.crt
+
     declare -r directory="/pgconf/tls"
-    exec {fd}<> <(:)
-    while read -r -t 5 -u "${fd}" || true; do
-      if [ "${directory}" -nt "/proc/self/fd/${fd}" ] &&
+    exec {fd}<> <(:||:)
+    while read -r -t 5 -u "${fd}" ||:; do
+      # Manage replication certificate.
+      if [[ "${directory}" -nt "/proc/self/fd/${fd}" ]] &&
         install -D --mode=0600 -t "/tmp/replication" "${directory}"/{replication/tls.crt,replication/tls.key,replication/ca.crt} &&
         pkill -HUP --exact --parent=1 postgres
       then
-        exec {fd}>&- && exec {fd}<> <(:)
+        exec {fd}>&- && exec {fd}<> <(:||:)
         stat --format='Loaded certificates dated %y' "${directory}"
+      fi
+
+      # Manage autogrow annotation.
+      # Return size in Mebibytes.
+      size=$(df --human-readable --block-size=M /pgdata | awk 'FNR == 2 {print $2}')
+      use=$(df --human-readable /pgdata | awk 'FNR == 2 {print $5}')
+      sizeInt="${size//M/}"
+      # Use the sed punctuation class, because the shell will not accept the percent sign in an expansion.
+      useInt=$(echo $use | sed 's/[[:punct:]]//g')
+      triggerExpansion="$((useInt > 75))"
+      if [ $triggerExpansion -eq 1 ]; then
+        newSize="$(((sizeInt / 2)+sizeInt))"
+        newSizeMi="${newSize}Mi"
+        d='[{"op": "add", "path": "/metadata/annotations/suggested-pgdata-pvc-size", "value": "'"$newSizeMi"'"}]'
+        curl --cacert ${CACERT} --header "Authorization: Bearer ${TOKEN}" -XPATCH "${APISERVER}/api/v1/namespaces/${NAMESPACE}/pods/${HOSTNAME}?fieldManager=kubectl-annotate" -H "Content-Type: application/json-patch+json" --data "$d"
       fi
     done
     }; export -f monitor; exec -a "$0" bash -ceu monitor
@@ -191,10 +216,14 @@ containers:
     privileged: false
     readOnlyRootFilesystem: true
     runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   volumeMounts:
   - mountPath: /pgconf/tls
     name: cert-volume
     readOnly: true
+  - mountPath: /pgdata
+    name: postgres-data
 initContainers:
 - command:
   - bash
@@ -212,24 +241,26 @@ initContainers:
     safelink() (
       local desired="$1" name="$2" current
       current=$(realpath "${name}")
-      if [ "${current}" = "${desired}" ]; then return; fi
+      if [[ "${current}" == "${desired}" ]]; then return; fi
       set -x; mv --no-target-directory "${current}" "${desired}"
       ln --no-dereference --force --symbolic "${desired}" "${name}"
     )
     echo Initializing ...
-    results 'uid' "$(id -u)" 'gid' "$(id -G)"
-    results 'postgres path' "$(command -v postgres)"
-    results 'postgres version' "${postgres_version:=$(postgres --version)}"
+    results 'uid' "$(id -u ||:)" 'gid' "$(id -G ||:)"
+    if [[ "${pgwal_directory}" == *"pgwal/"* ]] && [[ ! -d "/pgwal/pgbackrest-spool" ]];then rm -rf "/pgdata/pgbackrest-spool" && mkdir -p "/pgwal/pgbackrest-spool" && ln --force --symbolic "/pgwal/pgbackrest-spool" "/pgdata/pgbackrest-spool";fi
+    if [[ ! -e "/pgdata/pgbackrest-spool" ]];then rm -rf /pgdata/pgbackrest-spool;fi
+    results 'postgres path' "$(command -v postgres ||:)"
+    results 'postgres version' "${postgres_version:=$(postgres --version ||:)}"
     [[ "${postgres_version}" =~ ") ${expected_major_version}"($|[^0-9]) ]] ||
     halt Expected PostgreSQL version "${expected_major_version}"
     results 'config directory' "${PGDATA:?}"
-    postgres_data_directory=$([ -d "${PGDATA}" ] && postgres -C data_directory || echo "${PGDATA}")
+    postgres_data_directory=$([[ -d "${PGDATA}" ]] && postgres -C data_directory || echo "${PGDATA}")
     results 'data directory' "${postgres_data_directory}"
     [[ "${postgres_data_directory}" == "${PGDATA}" ]] ||
     halt Expected matching config and data directories
     bootstrap_dir="${postgres_data_directory}_bootstrap"
-    [ -d "${bootstrap_dir}" ] && results 'bootstrap directory' "${bootstrap_dir}"
-    [ -d "${bootstrap_dir}" ] && postgres_data_directory="${bootstrap_dir}"
+    [[ -d "${bootstrap_dir}" ]] && results 'bootstrap directory' "${bootstrap_dir}"
+    [[ -d "${bootstrap_dir}" ]] && postgres_data_directory="${bootstrap_dir}"
     if [[ ! -e "${postgres_data_directory}" || -O "${postgres_data_directory}" ]]; then
     install --directory --mode=0700 "${postgres_data_directory}"
     elif [[ -w "${postgres_data_directory}" && -g "${postgres_data_directory}" ]]; then
@@ -240,14 +271,16 @@ initContainers:
     install --directory --mode=0775 "${pgbrLog_directory}" ||
     halt "$(permissions "${pgbrLog_directory}" ||:)"
     install -D --mode=0600 -t "/tmp/replication" "/pgconf/tls/replication"/{tls.crt,tls.key,ca.crt}
-    [ -f "${postgres_data_directory}/PG_VERSION" ] || exit 0
+
+
+    [[ -f "${postgres_data_directory}/PG_VERSION" ]] || exit 0
     results 'data version' "${postgres_data_version:=$(< "${postgres_data_directory}/PG_VERSION")}"
     [[ "${postgres_data_version}" == "${expected_major_version}" ]] ||
     halt Expected PostgreSQL data version "${expected_major_version}"
     [[ ! -f "${postgres_data_directory}/postgresql.conf" ]] &&
     touch "${postgres_data_directory}/postgresql.conf"
     safelink "${pgwal_directory}" "${postgres_data_directory}/pg_wal"
-    results 'wal directory' "$(realpath "${postgres_data_directory}/pg_wal")"
+    results 'wal directory' "$(realpath "${postgres_data_directory}/pg_wal" ||:)"
     rm -f "${postgres_data_directory}/recovery.signal"
   - startup
   - "11"
@@ -264,6 +297,8 @@ initContainers:
     value: /etc/postgres/krb5.conf
   - name: KRB5RCACHEDIR
     value: /tmp
+  - name: LDAPTLS_CACERT
+    value: /etc/postgres/ldap/ca.crt
   imagePullPolicy: Always
   name: postgres-startup
   resources:
@@ -277,6 +312,8 @@ initContainers:
     privileged: false
     readOnlyRootFilesystem: true
     runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   volumeMounts:
   - mountPath: /pgconf/tls
     name: cert-volume
@@ -346,13 +383,13 @@ volumes:
 
 		pod := new(corev1.PodSpec)
 		InstancePod(ctx, cluster, instance,
-			serverSecretProjection, clientSecretProjection, dataVolume, walVolume, pod)
+			serverSecretProjection, clientSecretProjection, dataVolume, walVolume, nil, pod)
 
 		assert.Assert(t, len(pod.Containers) > 0)
 		assert.Assert(t, len(pod.InitContainers) > 0)
 
 		// Container has all mountPaths, including downwardAPI
-		assert.Assert(t, marshalMatches(pod.Containers[0].VolumeMounts, `
+		assert.Assert(t, cmp.MarshalMatches(pod.Containers[0].VolumeMounts, `
 - mountPath: /pgconf/tls
   name: cert-volume
   readOnly: true
@@ -365,7 +402,7 @@ volumes:
   name: postgres-wal`), "expected WAL and downwardAPI mounts in %q container", pod.Containers[0].Name)
 
 		// InitContainer has all mountPaths, except downwardAPI
-		assert.Assert(t, marshalMatches(pod.InitContainers[0].VolumeMounts, `
+		assert.Assert(t, cmp.MarshalMatches(pod.InitContainers[0].VolumeMounts, `
 - mountPath: /pgconf/tls
   name: cert-volume
   readOnly: true
@@ -374,7 +411,7 @@ volumes:
 - mountPath: /pgwal
   name: postgres-wal`), "expected WAL mount, no downwardAPI mount in %q container", pod.InitContainers[0].Name)
 
-		assert.Assert(t, marshalMatches(pod.Volumes, `
+		assert.Assert(t, cmp.MarshalMatches(pod.Volumes, `
 - name: cert-volume
   projected:
     defaultMode: 384
@@ -453,14 +490,14 @@ volumes:
 
 		pod := new(corev1.PodSpec)
 		InstancePod(ctx, clusterWithConfig, instance,
-			serverSecretProjection, clientSecretProjection, dataVolume, nil, pod)
+			serverSecretProjection, clientSecretProjection, dataVolume, nil, nil, pod)
 
 		assert.Assert(t, len(pod.Containers) > 0)
 		assert.Assert(t, len(pod.InitContainers) > 0)
 
 		// Container has all mountPaths, including downwardAPI,
 		// and the postgres-config
-		assert.Assert(t, marshalMatches(pod.Containers[0].VolumeMounts, `
+		assert.Assert(t, cmp.MarshalMatches(pod.Containers[0].VolumeMounts, `
 - mountPath: /pgconf/tls
   name: cert-volume
   readOnly: true
@@ -474,7 +511,7 @@ volumes:
   readOnly: true`), "expected WAL and downwardAPI mounts in %q container", pod.Containers[0].Name)
 
 		// InitContainer has all mountPaths, except downwardAPI and additionalConfig
-		assert.Assert(t, marshalMatches(pod.InitContainers[0].VolumeMounts, `
+		assert.Assert(t, cmp.MarshalMatches(pod.InitContainers[0].VolumeMounts, `
 - mountPath: /pgconf/tls
   name: cert-volume
   readOnly: true
@@ -490,15 +527,20 @@ volumes:
 
 		t.Run("SidecarNotEnabled", func(t *testing.T) {
 			InstancePod(ctx, cluster, sidecarInstance,
-				serverSecretProjection, clientSecretProjection, dataVolume, nil, pod)
+				serverSecretProjection, clientSecretProjection, dataVolume, nil, nil, pod)
 
 			assert.Equal(t, len(pod.Containers), 2, "expected 2 containers in Pod, got %d", len(pod.Containers))
 		})
 
 		t.Run("SidecarEnabled", func(t *testing.T) {
-			assert.NilError(t, util.AddAndSetFeatureGates(string(util.InstanceSidecars+"=true")))
+			gate := feature.NewGate()
+			assert.NilError(t, gate.SetFromMap(map[string]bool{
+				feature.InstanceSidecars: true,
+			}))
+			ctx := feature.NewContext(ctx, gate)
+
 			InstancePod(ctx, cluster, sidecarInstance,
-				serverSecretProjection, clientSecretProjection, dataVolume, nil, pod)
+				serverSecretProjection, clientSecretProjection, dataVolume, nil, nil, pod)
 
 			assert.Equal(t, len(pod.Containers), 3, "expected 3 containers in Pod, got %d", len(pod.Containers))
 
@@ -513,6 +555,57 @@ volumes:
 		})
 	})
 
+	t.Run("WithTablespaces", func(t *testing.T) {
+		clusterWithTablespaces := cluster.DeepCopy()
+		clusterWithTablespaces.Spec.InstanceSets = []v1beta1.PostgresInstanceSetSpec{
+			{
+				TablespaceVolumes: []v1beta1.TablespaceVolume{
+					{Name: "trial"},
+					{Name: "castle"},
+				},
+			},
+		}
+
+		tablespaceVolume1 := new(corev1.PersistentVolumeClaim)
+		tablespaceVolume1.Labels = map[string]string{
+			"postgres-operator.crunchydata.com/data": "castle",
+		}
+		tablespaceVolume2 := new(corev1.PersistentVolumeClaim)
+		tablespaceVolume2.Labels = map[string]string{
+			"postgres-operator.crunchydata.com/data": "trial",
+		}
+		tablespaceVolumes := []*corev1.PersistentVolumeClaim{tablespaceVolume1, tablespaceVolume2}
+
+		InstancePod(ctx, cluster, instance,
+			serverSecretProjection, clientSecretProjection, dataVolume, nil, tablespaceVolumes, pod)
+
+		assert.Assert(t, cmp.MarshalMatches(pod.Containers[0].VolumeMounts, `
+- mountPath: /pgconf/tls
+  name: cert-volume
+  readOnly: true
+- mountPath: /pgdata
+  name: postgres-data
+- mountPath: /etc/database-containerinfo
+  name: database-containerinfo
+  readOnly: true
+- mountPath: /tablespaces/castle
+  name: tablespace-castle
+- mountPath: /tablespaces/trial
+  name: tablespace-trial`), "expected tablespace mount(s) in %q container", pod.Containers[0].Name)
+
+		// InitContainer has all mountPaths, except downwardAPI and additionalConfig
+		assert.Assert(t, cmp.MarshalMatches(pod.InitContainers[0].VolumeMounts, `
+- mountPath: /pgconf/tls
+  name: cert-volume
+  readOnly: true
+- mountPath: /pgdata
+  name: postgres-data
+- mountPath: /tablespaces/castle
+  name: tablespace-castle
+- mountPath: /tablespaces/trial
+  name: tablespace-trial`), "expected tablespace mount(s) in %q container", pod.InitContainers[0].Name)
+	})
+
 	t.Run("WithWALVolumeWithWALVolumeSpec", func(t *testing.T) {
 		walVolume := new(corev1.PersistentVolumeClaim)
 		walVolume.Name = "walvol"
@@ -522,12 +615,12 @@ volumes:
 
 		pod := new(corev1.PodSpec)
 		InstancePod(ctx, cluster, instance,
-			serverSecretProjection, clientSecretProjection, dataVolume, walVolume, pod)
+			serverSecretProjection, clientSecretProjection, dataVolume, walVolume, nil, pod)
 
 		assert.Assert(t, len(pod.Containers) > 0)
 		assert.Assert(t, len(pod.InitContainers) > 0)
 
-		assert.Assert(t, marshalMatches(pod.Containers[0].VolumeMounts, `
+		assert.Assert(t, cmp.MarshalMatches(pod.Containers[0].VolumeMounts, `
 - mountPath: /pgconf/tls
   name: cert-volume
   readOnly: true
@@ -539,7 +632,7 @@ volumes:
 - mountPath: /pgwal
   name: postgres-wal`), "expected WAL and downwardAPI mounts in %q container", pod.Containers[0].Name)
 
-		assert.Assert(t, marshalMatches(pod.InitContainers[0].VolumeMounts, `
+		assert.Assert(t, cmp.MarshalMatches(pod.InitContainers[0].VolumeMounts, `
 - mountPath: /pgconf/tls
   name: cert-volume
   readOnly: true
@@ -548,7 +641,7 @@ volumes:
 - mountPath: /pgwal
   name: postgres-wal`), "expected WAL mount, no downwardAPI mount in %q container", pod.InitContainers[0].Name)
 
-		assert.Assert(t, marshalMatches(pod.Volumes, `
+		assert.Assert(t, cmp.MarshalMatches(pod.Volumes, `
 - name: cert-volume
   projected:
     defaultMode: 384
@@ -618,23 +711,23 @@ func TestPodSecurityContext(t *testing.T) {
 	cluster := new(v1beta1.PostgresCluster)
 	cluster.Default()
 
-	assert.Assert(t, marshalMatches(PodSecurityContext(cluster), `
+	assert.Assert(t, cmp.MarshalMatches(PodSecurityContext(cluster), `
 fsGroup: 26
 fsGroupChangePolicy: OnRootMismatch
 	`))
 
 	cluster.Spec.OpenShift = initialize.Bool(true)
-	assert.Assert(t, marshalMatches(PodSecurityContext(cluster), `
+	assert.Assert(t, cmp.MarshalMatches(PodSecurityContext(cluster), `
 fsGroupChangePolicy: OnRootMismatch
 	`))
 
 	cluster.Spec.SupplementalGroups = []int64{}
-	assert.Assert(t, marshalMatches(PodSecurityContext(cluster), `
+	assert.Assert(t, cmp.MarshalMatches(PodSecurityContext(cluster), `
 fsGroupChangePolicy: OnRootMismatch
 	`))
 
 	cluster.Spec.SupplementalGroups = []int64{999, 65000}
-	assert.Assert(t, marshalMatches(PodSecurityContext(cluster), `
+	assert.Assert(t, cmp.MarshalMatches(PodSecurityContext(cluster), `
 fsGroupChangePolicy: OnRootMismatch
 supplementalGroups:
 - 999
@@ -642,7 +735,7 @@ supplementalGroups:
 	`))
 
 	*cluster.Spec.OpenShift = false
-	assert.Assert(t, marshalMatches(PodSecurityContext(cluster), `
+	assert.Assert(t, cmp.MarshalMatches(PodSecurityContext(cluster), `
 fsGroup: 26
 fsGroupChangePolicy: OnRootMismatch
 supplementalGroups:

@@ -1,15 +1,16 @@
 name: CodeQL
 
 on:
+  pull_request:
   push:
     branches:
+      - main
       - master
   schedule:
     - cron: '10 18 * * 2'
 
 jobs:
   analyze:
-    name: Analyze
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -19,19 +20,17 @@ jobs:
     if: ${{ github.repository == 'CrunchyData/postgres-operator' }}
 
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
-        with: { go-version: 1.x }
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v2
+        uses: github/codeql-action/init@v3
         with: { languages: go }
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v2
+        # This action calls `make` which runs our "help" target.
+        uses: github/codeql-action/autobuild@v3
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v2
-        # This action calls `make` which runs our "all" target and tries to build
-        # container images. 😖 That fails, but the action ignores it and proceeds.
-        # See "CODEQL_EXTRACTOR_GO_BUILD_COMMAND" in https://github.com/github/codeql-go
+        uses: github/codeql-action/analyze@v3

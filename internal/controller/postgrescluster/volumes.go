@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
@@ -39,7 +28,7 @@ import (
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=list
+// +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={list}
 
 // observePersistentVolumeClaims reads all PVCs for cluster from the Kubernetes
 // API and sets the PersistentVolumeResizing condition as appropriate.
@@ -130,6 +119,15 @@ func (r *Reconciler) observePersistentVolumeClaims(
 					resizing.LastTransitionTime = minNotZero(
 						resizing.LastTransitionTime, condition.LastTransitionTime)
 				}
+
+			case
+				// The "ModifyingVolume" and "ModifyVolumeError" conditions occur
+				// when the attribute class of a PVC is changing. These attributes
+				// do not affect the size of a volume, so there's nothing to do.
+				// See the "VolumeAttributesClass" feature gate.
+				// - https://git.k8s.io/enhancements/keps/sig-storage/3751-volume-attributes-class
+				corev1.PersistentVolumeClaimVolumeModifyingVolume,
+				corev1.PersistentVolumeClaimVolumeModifyVolumeError:
 			}
 		}
 	}
@@ -190,7 +188,7 @@ func (r *Reconciler) configureExistingPVCs(
 	return volumes, err
 }
 
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={create,patch}
 
 // configureExistingPGVolumes first searches the observed volumes list to see
 // if the existing pgData volume defined in the spec is already updated. If not,
@@ -243,7 +241,7 @@ func (r *Reconciler) configureExistingPGVolumes(
 	return volumes, nil
 }
 
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={create,patch}
 
 // configureExistingPGWALVolume first searches the observed volumes list to see
 // if the existing pg_wal volume defined in the spec is already updated. If not,
@@ -295,7 +293,7 @@ func (r *Reconciler) configureExistingPGWALVolume(
 	return volumes, nil
 }
 
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={create,patch}
 
 // configureExistingRepoVolumes first searches the observed volumes list to see
 // if the existing pgBackRest repo volume defined in the spec is already updated.
@@ -345,7 +343,7 @@ func (r *Reconciler) configureExistingRepoVolumes(
 	return volumes, nil
 }
 
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=list
+// +kubebuilder:rbac:groups="batch",resources="jobs",verbs={list}
 
 // reconcileDirMoveJobs creates the existing volume move Jobs as defined in
 // the PostgresCluster spec. A boolean value is return to indicate whether
@@ -399,7 +397,7 @@ func (r *Reconciler) reconcileDirMoveJobs(ctx context.Context,
 	return false, nil
 }
 
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;patch;delete
+// +kubebuilder:rbac:groups="batch",resources="jobs",verbs={create,patch,delete}
 
 // reconcileMovePGDataDir creates a Job to move the provided pgData directory
 // in the given volume to the expected location before the PostgresCluster is
@@ -501,10 +499,9 @@ func (r *Reconciler) reconcileMovePGDataDir(ctx context.Context,
 		},
 	}
 	// set the priority class name, if it exists
-	if len(cluster.Spec.InstanceSets) > 0 &&
-		cluster.Spec.InstanceSets[0].PriorityClassName != nil {
+	if len(cluster.Spec.InstanceSets) > 0 {
 		jobSpec.Template.Spec.PriorityClassName =
-			*cluster.Spec.InstanceSets[0].PriorityClassName
+			initialize.FromPointer(cluster.Spec.InstanceSets[0].PriorityClassName)
 	}
 	moveDirJob.Spec = *jobSpec
 
@@ -523,7 +520,7 @@ func (r *Reconciler) reconcileMovePGDataDir(ctx context.Context,
 	return true, nil
 }
 
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;patch;delete
+// +kubebuilder:rbac:groups="batch",resources="jobs",verbs={create,patch,delete}
 
 // reconcileMoveWalDir creates a Job to move the provided pg_wal directory
 // in the given volume to the expected location before the PostgresCluster is
@@ -619,10 +616,9 @@ func (r *Reconciler) reconcileMoveWALDir(ctx context.Context,
 		},
 	}
 	// set the priority class name, if it exists
-	if len(cluster.Spec.InstanceSets) > 0 &&
-		cluster.Spec.InstanceSets[0].PriorityClassName != nil {
+	if len(cluster.Spec.InstanceSets) > 0 {
 		jobSpec.Template.Spec.PriorityClassName =
-			*cluster.Spec.InstanceSets[0].PriorityClassName
+			initialize.FromPointer(cluster.Spec.InstanceSets[0].PriorityClassName)
 	}
 	moveDirJob.Spec = *jobSpec
 
@@ -641,7 +637,7 @@ func (r *Reconciler) reconcileMoveWALDir(ctx context.Context,
 	return true, nil
 }
 
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;patch;delete
+// +kubebuilder:rbac:groups="batch",resources="jobs",verbs={create,patch,delete}
 
 // reconcileMoveRepoDir creates a Job to move the provided pgBackRest repo
 // directory in the given volume to the expected location before the
@@ -742,9 +738,7 @@ func (r *Reconciler) reconcileMoveRepoDir(ctx context.Context,
 	}
 	// set the priority class name, if it exists
 	if repoHost := cluster.Spec.Backups.PGBackRest.RepoHost; repoHost != nil {
-		if repoHost.PriorityClassName != nil {
-			jobSpec.Template.Spec.PriorityClassName = *repoHost.PriorityClassName
-		}
+		jobSpec.Template.Spec.PriorityClassName = initialize.FromPointer(repoHost.PriorityClassName)
 	}
 	moveDirJob.Spec = *jobSpec
 

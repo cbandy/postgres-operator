@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
@@ -26,7 +15,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/logging"
@@ -37,7 +25,7 @@ import (
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
-// +kubebuilder:rbac:groups="",resources=endpoints,verbs=deletecollection
+// +kubebuilder:rbac:groups="",resources="endpoints",verbs={deletecollection}
 
 func (r *Reconciler) deletePatroniArtifacts(
 	ctx context.Context, cluster *v1beta1.PostgresCluster,
@@ -103,7 +91,7 @@ func (r *Reconciler) handlePatroniRestarts(
 			ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, command ...string,
 		) error {
 			pod := primaryNeedsRestart.Pods[0]
-			return r.PodExec(pod.Namespace, pod.Name, container, stdin, stdout, stderr, command...)
+			return r.PodExec(ctx, pod.Namespace, pod.Name, container, stdin, stdout, stderr, command...)
 		})
 
 		return errors.WithStack(exec.RestartPendingMembers(ctx, "master", naming.PatroniScope(cluster)))
@@ -128,7 +116,7 @@ func (r *Reconciler) handlePatroniRestarts(
 			ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, command ...string,
 		) error {
 			pod := replicaNeedsRestart.Pods[0]
-			return r.PodExec(pod.Namespace, pod.Name, container, stdin, stdout, stderr, command...)
+			return r.PodExec(ctx, pod.Namespace, pod.Name, container, stdin, stdout, stderr, command...)
 		})
 
 		return errors.WithStack(exec.RestartPendingMembers(ctx, "replica", naming.PatroniScope(cluster)))
@@ -138,7 +126,7 @@ func (r *Reconciler) handlePatroniRestarts(
 	return nil
 }
 
-// +kubebuilder:rbac:groups="",resources=services,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="services",verbs={create,patch}
 
 // reconcilePatroniDistributedConfiguration sets labels and ownership on the
 // objects Patroni creates for its distributed configuration.
@@ -181,7 +169,7 @@ func (r *Reconciler) reconcilePatroniDistributedConfiguration(
 	return err
 }
 
-// +kubebuilder:rbac:resources=pods,verbs=get;list
+// +kubebuilder:rbac:resources="pods",verbs={get,list}
 
 func (r *Reconciler) reconcilePatroniDynamicConfiguration(
 	ctx context.Context, cluster *v1beta1.PostgresCluster, instances *observedInstances,
@@ -212,11 +200,11 @@ func (r *Reconciler) reconcilePatroniDynamicConfiguration(
 	// NOTE(cbandy): Despite the guards above, calling PodExec may still fail
 	// due to a missing or stopped container.
 
-	exec := func(_ context.Context, stdin io.Reader, stdout, stderr io.Writer, command ...string) error {
-		return r.PodExec(pod.Namespace, pod.Name, naming.ContainerDatabase, stdin, stdout, stderr, command...)
+	exec := func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, command ...string) error {
+		return r.PodExec(ctx, pod.Namespace, pod.Name, naming.ContainerDatabase, stdin, stdout, stderr, command...)
 	}
 
-	var configuration map[string]interface{}
+	var configuration map[string]any
 	if cluster.Spec.Patroni != nil {
 		configuration = cluster.Spec.Patroni.DynamicConfiguration
 	}
@@ -286,6 +274,8 @@ func (r *Reconciler) generatePatroniLeaderLeaseService(
 			}
 			servicePort.NodePort = *spec.NodePort
 		}
+		service.Spec.ExternalTrafficPolicy = initialize.FromPointer(spec.ExternalTrafficPolicy)
+		service.Spec.InternalTrafficPolicy = spec.InternalTrafficPolicy
 	}
 	service.Spec.Ports = []corev1.ServicePort{servicePort}
 
@@ -312,14 +302,14 @@ func (r *Reconciler) reconcilePatroniLeaderLease(
 	return service, err
 }
 
-// +kubebuilder:rbac:groups="",resources=endpoints,verbs=get
+// +kubebuilder:rbac:groups="",resources="endpoints",verbs={get}
 
 // reconcilePatroniStatus populates cluster.Status.Patroni with observations.
 func (r *Reconciler) reconcilePatroniStatus(
 	ctx context.Context, cluster *v1beta1.PostgresCluster,
 	observedInstances *observedInstances,
-) (reconcile.Result, error) {
-	result := reconcile.Result{}
+) (time.Duration, error) {
+	var requeue time.Duration
 	log := logging.FromContext(ctx)
 
 	var readyInstance bool
@@ -346,12 +336,11 @@ func (r *Reconciler) reconcilePatroniStatus(
 			// is detected in the cluster we assume this is the case, and simply log a message and
 			// requeue in order to try again until the expected value is found.
 			log.Info("detected ready instance but no initialize value")
-			result.RequeueAfter = 1 * time.Second
-			return result, nil
+			requeue = time.Second
 		}
 	}
 
-	return result, err
+	return requeue, err
 }
 
 // reconcileReplicationSecret creates a secret containing the TLS
@@ -535,13 +524,13 @@ func (r *Reconciler) reconcilePatroniSwitchover(ctx context.Context,
 	}
 	exec := func(_ context.Context, stdin io.Reader, stdout, stderr io.Writer,
 		command ...string) error {
-		return r.PodExec(runningPod.Namespace, runningPod.Name, naming.ContainerDatabase, stdin,
+		return r.PodExec(ctx, runningPod.Namespace, runningPod.Name, naming.ContainerDatabase, stdin,
 			stdout, stderr, command...)
 	}
 
 	// To ensure idempotency, the operator verifies that the timeline reported by Patroni
 	// matches the timeline that was present when the switchover was first requested.
-	// TODO(benjb): consider pulling the timeline from the pod annotation; manual experiments
+	// TODO(benjaminjb): consider pulling the timeline from the pod annotation; manual experiments
 	// have shown that the annotation on the Leader pod is up to date during a switchover, but
 	// missing from the Replica pods.
 	timeline, err := patroni.Executor(exec).GetTimeline(ctx)

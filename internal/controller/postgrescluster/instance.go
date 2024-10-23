@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
@@ -29,6 +18,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -38,6 +28,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/crunchydata/postgres-operator/internal/config"
+	"github.com/crunchydata/postgres-operator/internal/controller/runtime"
+	"github.com/crunchydata/postgres-operator/internal/feature"
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/logging"
 	"github.com/crunchydata/postgres-operator/internal/naming"
@@ -209,7 +201,7 @@ type observedInstances struct {
 	byName     map[string]*Instance
 	bySet      map[string][]*Instance
 	forCluster []*Instance
-	setNames   sets.String
+	setNames   sets.Set[string]
 }
 
 // newObservedInstances builds an observedInstances from Kubernetes API objects.
@@ -221,7 +213,7 @@ func newObservedInstances(
 	observed := observedInstances{
 		byName:   make(map[string]*Instance),
 		bySet:    make(map[string][]*Instance),
-		setNames: make(sets.String),
+		setNames: make(sets.Set[string]),
 	}
 
 	sets := make(map[string]*v1beta1.PostgresInstanceSetSpec)
@@ -291,8 +283,8 @@ func (observed *observedInstances) writablePod(container string) (*corev1.Pod, *
 	return nil, nil
 }
 
-// +kubebuilder:rbac:groups="",resources=pods,verbs=list
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=list
+// +kubebuilder:rbac:groups="",resources="pods",verbs={list}
+// +kubebuilder:rbac:groups="apps",resources="statefulsets",verbs={list}
 
 // observeInstances populates cluster.Status.InstanceSets with observations and
 // builds an observedInstances by reading from the Kubernetes API.
@@ -301,6 +293,8 @@ func (r *Reconciler) observeInstances(
 ) (*observedInstances, error) {
 	pods := &corev1.PodList{}
 	runners := &appsv1.StatefulSetList{}
+
+	autogrow := feature.Enabled(ctx, feature.AutoGrowVolumes)
 
 	selector, err := naming.AsSelector(naming.ClusterInstances(cluster.Name))
 	if err == nil {
@@ -320,19 +314,54 @@ func (r *Reconciler) observeInstances(
 
 	observed := newObservedInstances(cluster, runners.Items, pods.Items)
 
+	// Save desired volume size values in case the status is removed.
+	// This may happen in cases where the Pod is restarted, the cluster
+	// is shutdown, etc. Only save values for instances defined in the spec.
+	previousDesiredRequests := make(map[string]string)
+	if autogrow {
+		for _, statusIS := range cluster.Status.InstanceSets {
+			if statusIS.DesiredPGDataVolume != nil {
+				for k, v := range statusIS.DesiredPGDataVolume {
+					previousDesiredRequests[k] = v
+				}
+			}
+		}
+	}
+
 	// Fill out status sorted by set name.
 	cluster.Status.InstanceSets = cluster.Status.InstanceSets[:0]
-	for _, name := range observed.setNames.List() {
+	for _, name := range sets.List(observed.setNames) {
 		status := v1beta1.PostgresInstanceSetStatus{Name: name}
+		status.DesiredPGDataVolume = make(map[string]string)
 
 		for _, instance := range observed.bySet[name] {
-			status.Replicas += int32(len(instance.Pods))
+			status.Replicas += int32(len(instance.Pods)) //nolint:gosec
 
 			if ready, known := instance.IsReady(); known && ready {
 				status.ReadyReplicas++
 			}
 			if matches, known := instance.PodMatchesPodTemplate(); known && matches {
 				status.UpdatedReplicas++
+			}
+			if autogrow {
+				// Store desired pgData volume size for each instance Pod.
+				// The 'suggested-pgdata-pvc-size' annotation value is stored in the PostgresCluster
+				// status so that 1) it is available to the function 'reconcilePostgresDataVolume'
+				// and 2) so that the value persists after Pod restart and cluster shutdown events.
+				for _, pod := range instance.Pods {
+					// don't set an empty status
+					if pod.Annotations["suggested-pgdata-pvc-size"] != "" {
+						status.DesiredPGDataVolume[instance.Name] = pod.Annotations["suggested-pgdata-pvc-size"]
+					}
+				}
+			}
+		}
+
+		// If autogrow is enabled, get the desired volume size for each instance.
+		if autogrow {
+			for _, instance := range observed.bySet[name] {
+				status.DesiredPGDataVolume[instance.Name] = r.storeDesiredRequest(ctx, cluster,
+					name, status.DesiredPGDataVolume[instance.Name], previousDesiredRequests[instance.Name])
 			}
 		}
 
@@ -342,8 +371,69 @@ func (r *Reconciler) observeInstances(
 	return observed, err
 }
 
-// +kubebuilder:rbac:groups="",resources=pods,verbs=list
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=patch
+// storeDesiredRequest saves the appropriate request value to the PostgresCluster
+// status. If the value has grown, create an Event.
+func (r *Reconciler) storeDesiredRequest(
+	ctx context.Context, cluster *v1beta1.PostgresCluster,
+	instanceSetName, desiredRequest, desiredRequestBackup string,
+) string {
+	var current resource.Quantity
+	var previous resource.Quantity
+	var err error
+	log := logging.FromContext(ctx)
+
+	// Parse the desired request from the cluster's status.
+	if desiredRequest != "" {
+		current, err = resource.ParseQuantity(desiredRequest)
+		if err != nil {
+			log.Error(err, "Unable to parse pgData volume request from status ("+
+				desiredRequest+") for "+cluster.Name+"/"+instanceSetName)
+			// If there was an error parsing the value, treat as unset (equivalent to zero).
+			desiredRequest = ""
+			current, _ = resource.ParseQuantity("")
+
+		}
+	}
+
+	// Parse the desired request from the status backup.
+	if desiredRequestBackup != "" {
+		previous, err = resource.ParseQuantity(desiredRequestBackup)
+		if err != nil {
+			log.Error(err, "Unable to parse pgData volume request from status backup ("+
+				desiredRequestBackup+") for "+cluster.Name+"/"+instanceSetName)
+			// If there was an error parsing the value, treat as unset (equivalent to zero).
+			desiredRequestBackup = ""
+			previous, _ = resource.ParseQuantity("")
+
+		}
+	}
+
+	// Determine if the limit is set for this instance set.
+	var limitSet bool
+	for _, specInstance := range cluster.Spec.InstanceSets {
+		if specInstance.Name == instanceSetName {
+			limitSet = !specInstance.DataVolumeClaimSpec.Resources.Limits.Storage().IsZero()
+		}
+	}
+
+	if limitSet && current.Value() > previous.Value() {
+		r.Recorder.Eventf(cluster, corev1.EventTypeNormal, "VolumeAutoGrow",
+			"pgData volume expansion to %v requested for %s/%s.",
+			current.String(), cluster.Name, instanceSetName)
+	}
+
+	// If the desired size was not observed, update with previously stored value.
+	// This can happen in scenarios where the annotation on the Pod is missing
+	// such as when the cluster is shutdown or a Pod is in the middle of a restart.
+	if desiredRequest == "" {
+		desiredRequest = desiredRequestBackup
+	}
+
+	return desiredRequest
+}
+
+// +kubebuilder:rbac:groups="",resources="pods",verbs={list}
+// +kubebuilder:rbac:groups="apps",resources="statefulsets",verbs={patch}
 
 // deleteInstances gracefully stops instances of cluster to avoid failovers and
 // unclean shutdowns of PostgreSQL. It returns (nil, nil) when finished.
@@ -402,7 +492,7 @@ func (r *Reconciler) deleteInstances(
 		// mistake that something else is deleting objects. Use RequeueAfter to
 		// avoid being rate-limited due to a deluge of delete events.
 		if err != nil {
-			result.RequeueAfter = 10 * time.Second
+			result = runtime.RequeueWithoutBackoff(10 * time.Second)
 		}
 		return client.IgnoreNotFound(err)
 	}
@@ -435,10 +525,10 @@ func (r *Reconciler) deleteInstances(
 	return &result, err
 }
 
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=delete;list
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=delete;list
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=delete;list
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=delete;list
+// +kubebuilder:rbac:groups="",resources="configmaps",verbs={delete,list}
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={delete,list}
+// +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={delete,list}
+// +kubebuilder:rbac:groups="apps",resources="statefulsets",verbs={delete,list}
 
 // deleteInstance will delete all resources related to a single instance
 func (r *Reconciler) deleteInstance(
@@ -502,7 +592,8 @@ func (r *Reconciler) reconcileInstanceSets(
 	patroniLeaderService *corev1.Service,
 	primaryCertificate *corev1.SecretProjection,
 	clusterVolumes []corev1.PersistentVolumeClaim,
-	exporterWebConfig *corev1.ConfigMap,
+	exporterQueriesConfig, exporterWebConfig *corev1.ConfigMap,
+	backupsSpecFound bool,
 ) error {
 
 	// Go through the observed instances and check if a primary has been determined.
@@ -539,7 +630,9 @@ func (r *Reconciler) reconcileInstanceSets(
 			rootCA, clusterPodService, instanceServiceAccount,
 			patroniLeaderService, primaryCertificate,
 			findAvailableInstanceNames(*set, instances, clusterVolumes),
-			numInstancePods, clusterVolumes, exporterWebConfig)
+			numInstancePods, clusterVolumes, exporterQueriesConfig, exporterWebConfig,
+			backupsSpecFound,
+		)
 
 		if err == nil {
 			err = r.reconcileInstanceSetPodDisruptionBudget(ctx, cluster, set)
@@ -572,7 +665,7 @@ func (r *Reconciler) reconcileInstanceSets(
 	return err
 }
 
-// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=list
+// +kubebuilder:rbac:groups="policy",resources="poddisruptionbudgets",verbs={list}
 
 // cleanupPodDisruptionBudgets removes pdbs that do not have an
 // associated Instance Set
@@ -591,7 +684,7 @@ func (r *Reconciler) cleanupPodDisruptionBudgets(
 	}
 
 	if err == nil {
-		setNames := sets.String{}
+		setNames := sets.Set[string]{}
 		for _, set := range cluster.Spec.InstanceSets {
 			setNames.Insert(set.Name)
 		}
@@ -672,7 +765,7 @@ func findAvailableInstanceNames(set v1beta1.PostgresInstanceSetSpec,
 	return availableInstanceNames
 }
 
-// +kubebuilder:rbac:groups="",resources=pods,verbs=delete
+// +kubebuilder:rbac:groups="",resources="pods",verbs={delete}
 
 // rolloutInstance redeploys the Pod of instance by deleting it. Its StatefulSet
 // will recreate it according to its current PodTemplate. When instance is the
@@ -692,7 +785,7 @@ func (r *Reconciler) rolloutInstance(
 
 	pod := instance.Pods[0]
 	exec := func(_ context.Context, stdin io.Reader, stdout, stderr io.Writer, command ...string) error {
-		return r.PodExec(pod.Namespace, pod.Name, naming.ContainerDatabase, stdin, stdout, stderr, command...)
+		return r.PodExec(ctx, pod.Namespace, pod.Name, naming.ContainerDatabase, stdin, stdout, stderr, command...)
 	}
 
 	primary, known := instance.IsPrimary()
@@ -958,7 +1051,7 @@ func podsToKeep(instances []corev1.Pod, want map[string]int) []corev1.Pod {
 
 }
 
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=list
+// +kubebuilder:rbac:groups="apps",resources="statefulsets",verbs={list}
 
 // scaleUpInstances updates the cluster until the number of instances matches
 // the cluster spec
@@ -977,7 +1070,8 @@ func (r *Reconciler) scaleUpInstances(
 	availableInstanceNames []string,
 	numInstancePods int,
 	clusterVolumes []corev1.PersistentVolumeClaim,
-	exporterWebConfig *corev1.ConfigMap,
+	exporterQueriesConfig, exporterWebConfig *corev1.ConfigMap,
+	backupsSpecFound bool,
 ) ([]*appsv1.StatefulSet, error) {
 	log := logging.FromContext(ctx)
 
@@ -1021,7 +1115,8 @@ func (r *Reconciler) scaleUpInstances(
 			clusterConfigMap, clusterReplicationSecret,
 			rootCA, clusterPodService, instanceServiceAccount,
 			patroniLeaderService, primaryCertificate, instances[i],
-			numInstancePods, clusterVolumes, exporterWebConfig,
+			numInstancePods, clusterVolumes, exporterQueriesConfig, exporterWebConfig,
+			backupsSpecFound,
 		)
 	}
 	if err == nil {
@@ -1031,7 +1126,7 @@ func (r *Reconciler) scaleUpInstances(
 	return instances, err
 }
 
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=create;patch
+// +kubebuilder:rbac:groups="apps",resources="statefulsets",verbs={create,patch}
 
 // reconcileInstance writes instance according to spec of cluster.
 // See Reconciler.reconcileInstanceSet.
@@ -1050,7 +1145,8 @@ func (r *Reconciler) reconcileInstance(
 	instance *appsv1.StatefulSet,
 	numInstancePods int,
 	clusterVolumes []corev1.PersistentVolumeClaim,
-	exporterWebConfig *corev1.ConfigMap,
+	exporterQueriesConfig, exporterWebConfig *corev1.ConfigMap,
+	backupsSpecFound bool,
 ) error {
 	log := logging.FromContext(ctx).WithValues("instance", instance.Name)
 	ctx = logging.NewContext(ctx, log)
@@ -1071,6 +1167,7 @@ func (r *Reconciler) reconcileInstance(
 		instanceCertificates *corev1.Secret
 		postgresDataVolume   *corev1.PersistentVolumeClaim
 		postgresWALVolume    *corev1.PersistentVolumeClaim
+		tablespaceVolumes    []*corev1.PersistentVolumeClaim
 	)
 
 	if err == nil {
@@ -1081,20 +1178,25 @@ func (r *Reconciler) reconcileInstance(
 			ctx, cluster, spec, instance, rootCA)
 	}
 	if err == nil {
-		postgresDataVolume, err = r.reconcilePostgresDataVolume(ctx, cluster, spec, instance, clusterVolumes)
+		postgresDataVolume, err = r.reconcilePostgresDataVolume(ctx, cluster, spec, instance, clusterVolumes, nil)
 	}
 	if err == nil {
 		postgresWALVolume, err = r.reconcilePostgresWALVolume(ctx, cluster, spec, instance, observed, clusterVolumes)
 	}
 	if err == nil {
+		tablespaceVolumes, err = r.reconcileTablespaceVolumes(ctx, cluster, spec, instance, clusterVolumes)
+	}
+	if err == nil {
 		postgres.InstancePod(
 			ctx, cluster, spec,
 			primaryCertificate, replicationCertSecretProjection(clusterReplicationSecret),
-			postgresDataVolume, postgresWALVolume,
+			postgresDataVolume, postgresWALVolume, tablespaceVolumes,
 			&instance.Spec.Template.Spec)
 
-		addPGBackRestToInstancePodSpec(
-			cluster, instanceCertificates, &instance.Spec.Template.Spec)
+		if backupsSpecFound {
+			addPGBackRestToInstancePodSpec(
+				ctx, cluster, instanceCertificates, &instance.Spec.Template.Spec)
+		}
 
 		err = patroni.InstancePod(
 			ctx, cluster, clusterConfigMap, clusterPodService, patroniLeaderService,
@@ -1103,7 +1205,7 @@ func (r *Reconciler) reconcileInstance(
 
 	// Add pgMonitor resources to the instance Pod spec
 	if err == nil {
-		err = addPGMonitorToInstancePodSpec(cluster, &instance.Spec.Template, exporterWebConfig)
+		err = addPGMonitorToInstancePodSpec(ctx, cluster, &instance.Spec.Template, exporterQueriesConfig, exporterWebConfig)
 	}
 
 	// add nss_wrapper init container and add nss_wrapper env vars to the database and pgbackrest
@@ -1196,15 +1298,11 @@ func generateInstanceStatefulSetIntent(_ context.Context,
 	sts.Spec.Template.Spec.Affinity = spec.Affinity
 	sts.Spec.Template.Spec.Tolerations = spec.Tolerations
 	sts.Spec.Template.Spec.TopologySpreadConstraints = spec.TopologySpreadConstraints
-	if spec.PriorityClassName != nil {
-		sts.Spec.Template.Spec.PriorityClassName = *spec.PriorityClassName
-	}
+	sts.Spec.Template.Spec.PriorityClassName = initialize.FromPointer(spec.PriorityClassName)
 
 	// if default pod scheduling is not explicitly disabled, add the default
 	// pod topology spread constraints
-	if cluster.Spec.DisableDefaultPodScheduling == nil ||
-		(cluster.Spec.DisableDefaultPodScheduling != nil &&
-			!*cluster.Spec.DisableDefaultPodScheduling) {
+	if !initialize.FromPointer(cluster.Spec.DisableDefaultPodScheduling) {
 		sts.Spec.Template.Spec.TopologySpreadConstraints = append(
 			sts.Spec.Template.Spec.TopologySpreadConstraints,
 			defaultTopologySpreadConstraints(
@@ -1267,18 +1365,17 @@ func generateInstanceStatefulSetIntent(_ context.Context,
 
 // addPGBackRestToInstancePodSpec adds pgBackRest configurations and sidecars
 // to the PodSpec.
-func addPGBackRestToInstancePodSpec(cluster *v1beta1.PostgresCluster,
+func addPGBackRestToInstancePodSpec(
+	ctx context.Context, cluster *v1beta1.PostgresCluster,
 	instanceCertificates *corev1.Secret, instancePod *corev1.PodSpec,
 ) {
-	if pgbackrest.DedicatedRepoHostEnabled(cluster) {
-		pgbackrest.AddServerToInstancePod(cluster, instancePod,
-			instanceCertificates.Name)
-	}
+	pgbackrest.AddServerToInstancePod(ctx, cluster, instancePod,
+		instanceCertificates.Name)
 
 	pgbackrest.AddConfigToInstancePod(cluster, instancePod)
 }
 
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="configmaps",verbs={create,patch}
 
 // reconcileInstanceConfigMap writes the ConfigMap that contains generated
 // files (etc) that apply to instance of cluster.
@@ -1314,8 +1411,8 @@ func (r *Reconciler) reconcileInstanceConfigMap(
 	return instanceConfigMap, err
 }
 
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={get}
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={create,patch}
 
 // reconcileInstanceCertificates writes the Secret that contains certificates
 // and private keys for instance of cluster.
@@ -1377,7 +1474,7 @@ func (r *Reconciler) reconcileInstanceCertificates(
 	return instanceCerts, err
 }
 
-// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=create;patch;get;delete
+// +kubebuilder:rbac:groups="policy",resources="poddisruptionbudgets",verbs={create,patch,get,delete}
 
 // reconcileInstanceSetPodDisruptionBudget creates a PDB for an instance set. A
 // PDB will be created when the minAvailable is determined to be greater than 0.

@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package v1beta1
 
@@ -33,8 +22,8 @@ type PostgresClusterSpec struct {
 	DataSource *DataSource `json:"dataSource,omitempty"`
 
 	// PostgreSQL backup configuration
-	// +kubebuilder:validation:Required
-	Backups Backups `json:"backups"`
+	// +optional
+	Backups Backups `json:"backups,omitempty"`
 
 	// The secret containing the Certificates and Keys to encrypt PostgreSQL
 	// traffic will need to contain the server TLS certificate, TLS key and the
@@ -122,8 +111,8 @@ type PostgresClusterSpec struct {
 
 	// The major version of PostgreSQL installed in the PostgreSQL image
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=15
+	// +kubebuilder:validation:Minimum=11
+	// +kubebuilder:validation:Maximum=17
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,order=1
 	PostgresVersion int `json:"postgresVersion"`
 
@@ -148,6 +137,10 @@ type PostgresClusterSpec struct {
 	// +optional
 	Service *ServiceSpec `json:"service,omitempty"`
 
+	// Specification of the service that exposes PostgreSQL replica instances
+	// +optional
+	ReplicaService *ServiceSpec `json:"replicaService,omitempty"`
+
 	// Whether or not the PostgreSQL cluster should be stopped.
 	// When this is true, workloads are scaled to zero and CronJobs
 	// are suspended.
@@ -171,6 +164,7 @@ type PostgresClusterSpec struct {
 	// from this list does NOT drop the user nor revoke their access.
 	// +listType=map
 	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=64
 	// +optional
 	Users []PostgresUserSpec `json:"users,omitempty"`
 
@@ -180,7 +174,7 @@ type PostgresClusterSpec struct {
 // DataSource defines data sources for a new PostgresCluster.
 type DataSource struct {
 	// Defines a pgBackRest cloud-based data source that can be used to pre-populate the
-	// the PostgreSQL data directory for a new PostgreSQL cluster using a pgBackRest restore.
+	// PostgreSQL data directory for a new PostgreSQL cluster using a pgBackRest restore.
 	// The PGBackRest field is incompatible with the PostgresCluster field: only one
 	// data source can be used for pre-populating a new PostgreSQL cluster
 	// +optional
@@ -217,7 +211,7 @@ type DataSourceVolumes struct {
 	PGBackRestVolume *DataSourceVolume `json:"pgBackRestVolume,omitempty"`
 }
 
-// DataSourceVolume defines the PVC name and data diretory path for an existing cluster volume.
+// DataSourceVolume defines the PVC name and data directory path for an existing cluster volume.
 type DataSourceVolume struct {
 	// The existing PVC name.
 	PVCName string `json:"pvcName"`
@@ -317,8 +311,12 @@ func (s *PostgresClusterSpec) Default() {
 type Backups struct {
 
 	// pgBackRest archive configuration
-	// +kubebuilder:validation:Required
+	// +optional
 	PGBackRest PGBackRestArchive `json:"pgbackrest"`
+
+	// VolumeSnapshot configuration
+	// +optional
+	Snapshots *VolumeSnapshots `json:"snapshots,omitempty"`
 }
 
 // PostgresClusterStatus defines the observed state of PostgresCluster
@@ -339,6 +337,12 @@ type PostgresClusterStatus struct {
 	// Status information for pgBackRest
 	// +optional
 	PGBackRest *PGBackRestStatus `json:"pgbackrest,omitempty"`
+
+	// +optional
+	RegistrationRequired *RegistrationRequirementStatus `json:"registrationRequired,omitempty"`
+
+	// +optional
+	TokenRequired string `json:"tokenRequired,omitempty"`
 
 	// Stores the current PostgreSQL major version following a successful
 	// major PostgreSQL upgrade.
@@ -393,6 +397,7 @@ const (
 	PersistentVolumeResizing   = "PersistentVolumeResizing"
 	PostgresClusterProgressing = "Progressing"
 	ProxyAvailable             = "ProxyAvailable"
+	Registered                 = "Registered"
 )
 
 type PostgresInstanceSetSpec struct {
@@ -478,6 +483,35 @@ type PostgresInstanceSetSpec struct {
 	// More info: https://www.postgresql.org/docs/current/wal.html
 	// +optional
 	WALVolumeClaimSpec *corev1.PersistentVolumeClaimSpec `json:"walVolumeClaimSpec,omitempty"`
+
+	// The list of tablespaces volumes to mount for this postgrescluster
+	// This field requires enabling TablespaceVolumes feature gate
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	TablespaceVolumes []TablespaceVolume `json:"tablespaceVolumes,omitempty"`
+}
+
+type TablespaceVolume struct {
+	// This value goes into
+	// a. the name of a corev1.PersistentVolumeClaim,
+	// b. a label value, and
+	// c. a path name.
+	// So it must match both IsDNS1123Subdomain and IsValidLabelValue;
+	// and be valid as a file path.
+
+	// The name for the tablespace, used as the path name for the volume.
+	// Must be unique in the instance set since they become the directory names.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9]*$`
+	// +kubebuilder:validation:Type=string
+	Name string `json:"name"`
+
+	// Defines a PersistentVolumeClaim for a tablespace.
+	// More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes
+	// +kubebuilder:validation:Required
+	DataVolumeClaimSpec corev1.PersistentVolumeClaimSpec `json:"dataVolumeClaimSpec"`
 }
 
 // InstanceSidecars defines the configuration for instance sidecar containers
@@ -513,6 +547,10 @@ type PostgresInstanceSetStatus struct {
 	// Total number of pods that have the desired specification.
 	// +optional
 	UpdatedReplicas int32 `json:"updatedReplicas,omitempty"`
+
+	// Desired Size of the pgData volume
+	// +optional
+	DesiredPGDataVolume map[string]string `json:"desiredPGDataVolume,omitempty"`
 }
 
 // PostgresProxySpec is a union of the supported PostgreSQL proxies.
@@ -527,6 +565,10 @@ func (s *PostgresProxySpec) Default() {
 	if s.PGBouncer != nil {
 		s.PGBouncer.Default()
 	}
+}
+
+type RegistrationRequirementStatus struct {
+	PGOVersion string `json:"pgoVersion,omitempty"`
 }
 
 type PostgresProxyStatus struct {
@@ -642,34 +684,16 @@ type MonitoringStatus struct {
 	ExporterConfiguration string `json:"exporterConfiguration,omitempty"`
 }
 
-// PGMonitorSpec defines the desired state of the pgMonitor tool suite
-type PGMonitorSpec struct {
-	// +optional
-	Exporter *ExporterSpec `json:"exporter,omitempty"`
+func NewPostgresCluster() *PostgresCluster {
+	cluster := &PostgresCluster{}
+	cluster.SetGroupVersionKind(GroupVersion.WithKind("PostgresCluster"))
+	return cluster
 }
 
-type ExporterSpec struct {
-
-	// Projected volumes containing custom PostgreSQL Exporter configuration.  Currently supports
-	// the customization of PostgreSQL Exporter queries. If a "queries.yml" file is detected in
-	// any volume projected using this field, it will be loaded using the "extend.query-path" flag:
-	// https://github.com/prometheus-community/postgres_exporter#flags
-	// Changing the values of field causes PostgreSQL and the exporter to restart.
-	// +optional
-	Configuration []corev1.VolumeProjection `json:"configuration,omitempty"`
-
-	// Projected secret containing custom TLS certificates to encrypt output from the exporter
-	// web server
-	// +optional
-	CustomTLSSecret *corev1.SecretProjection `json:"customTLSSecret,omitempty"`
-
-	// The image name to use for crunchy-postgres-exporter containers. The image may
-	// also be set using the RELATED_IMAGE_PGEXPORTER environment variable.
-	// +optional
-	Image string `json:"image,omitempty"`
-
-	// Changing this value causes PostgreSQL and the exporter to restart.
-	// More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers
-	// +optional
-	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+// VolumeSnapshots defines the configuration for VolumeSnapshots
+type VolumeSnapshots struct {
+	// Name of the VolumeSnapshotClass that should be used by VolumeSnapshots
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	VolumeSnapshotClassName string `json:"volumeSnapshotClassName"`
 }

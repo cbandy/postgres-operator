@@ -1,17 +1,6 @@
-/*
- Copyright 2021 - 2022 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
+// Copyright 2021 - 2024 Crunchy Data Solutions, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 package postgrescluster
 
@@ -68,8 +57,8 @@ func (r *Reconciler) reconcilePGBouncer(
 	return err
 }
 
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=create;delete;patch
+// +kubebuilder:rbac:groups="",resources="configmaps",verbs={get}
+// +kubebuilder:rbac:groups="",resources="configmaps",verbs={create,delete,patch}
 
 // reconcilePGBouncerConfigMap writes the ConfigMap for a PgBouncer Pod.
 func (r *Reconciler) reconcilePGBouncerConfigMap(
@@ -112,7 +101,7 @@ func (r *Reconciler) reconcilePGBouncerConfigMap(
 	return configmap, err
 }
 
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
+// +kubebuilder:rbac:groups="",resources="pods",verbs={get,list}
 
 // reconcilePGBouncerInPostgreSQL writes the user and other objects needed by
 // PgBouncer inside of PostgreSQL.
@@ -181,8 +170,8 @@ func (r *Reconciler) reconcilePGBouncerInPostgreSQL(
 
 	if err == nil {
 		ctx := logging.NewContext(ctx, logging.FromContext(ctx).WithValues("revision", revision))
-		err = action(ctx, func(_ context.Context, stdin io.Reader, stdout, stderr io.Writer, command ...string) error {
-			return r.PodExec(pod.Namespace, pod.Name, naming.ContainerDatabase, stdin, stdout, stderr, command...)
+		err = action(ctx, func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, command ...string) error {
+			return r.PodExec(ctx, pod.Namespace, pod.Name, naming.ContainerDatabase, stdin, stdout, stderr, command...)
 		})
 	}
 	if err == nil {
@@ -192,8 +181,8 @@ func (r *Reconciler) reconcilePGBouncerInPostgreSQL(
 	return err
 }
 
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=create;delete;patch
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={get}
+// +kubebuilder:rbac:groups="",resources="secrets",verbs={create,delete,patch}
 
 // reconcilePGBouncerSecret writes the Secret for a PgBouncer Pod.
 func (r *Reconciler) reconcilePGBouncerSecret(
@@ -315,6 +304,8 @@ func (r *Reconciler) generatePGBouncerService(
 			}
 			servicePort.NodePort = *spec.NodePort
 		}
+		service.Spec.ExternalTrafficPolicy = initialize.FromPointer(spec.ExternalTrafficPolicy)
+		service.Spec.InternalTrafficPolicy = spec.InternalTrafficPolicy
 	}
 	service.Spec.Ports = []corev1.ServicePort{servicePort}
 
@@ -351,7 +342,7 @@ func (r *Reconciler) reconcilePGBouncerService(
 
 // generatePGBouncerDeployment returns an appsv1.Deployment that runs PgBouncer pods.
 func (r *Reconciler) generatePGBouncerDeployment(
-	cluster *v1beta1.PostgresCluster,
+	ctx context.Context, cluster *v1beta1.PostgresCluster,
 	primaryCertificate *corev1.SecretProjection,
 	configmap *corev1.ConfigMap, secret *corev1.Secret,
 ) (*appsv1.Deployment, bool, error) {
@@ -404,25 +395,20 @@ func (r *Reconciler) generatePGBouncerDeployment(
 	// - https://docs.k8s.io/concepts/workloads/controllers/deployment/#rolling-update-deployment
 	deploy.Spec.Strategy.Type = appsv1.RollingUpdateDeploymentStrategyType
 	deploy.Spec.Strategy.RollingUpdate = &appsv1.RollingUpdateDeployment{
-		MaxUnavailable: intstr.ValueOrDefault(nil, intstr.FromInt(0)),
+		MaxUnavailable: initialize.Pointer(intstr.FromInt32(0)),
 	}
 
 	// Use scheduling constraints from the cluster spec.
 	deploy.Spec.Template.Spec.Affinity = cluster.Spec.Proxy.PGBouncer.Affinity
 	deploy.Spec.Template.Spec.Tolerations = cluster.Spec.Proxy.PGBouncer.Tolerations
-
-	if cluster.Spec.Proxy.PGBouncer.PriorityClassName != nil {
-		deploy.Spec.Template.Spec.PriorityClassName = *cluster.Spec.Proxy.PGBouncer.PriorityClassName
-	}
-
+	deploy.Spec.Template.Spec.PriorityClassName =
+		initialize.FromPointer(cluster.Spec.Proxy.PGBouncer.PriorityClassName)
 	deploy.Spec.Template.Spec.TopologySpreadConstraints =
 		cluster.Spec.Proxy.PGBouncer.TopologySpreadConstraints
 
 	// if default pod scheduling is not explicitly disabled, add the default
 	// pod topology spread constraints
-	if cluster.Spec.DisableDefaultPodScheduling == nil ||
-		(cluster.Spec.DisableDefaultPodScheduling != nil &&
-			!*cluster.Spec.DisableDefaultPodScheduling) {
+	if !initialize.FromPointer(cluster.Spec.DisableDefaultPodScheduling) {
 		deploy.Spec.Template.Spec.TopologySpreadConstraints = append(
 			deploy.Spec.Template.Spec.TopologySpreadConstraints,
 			defaultTopologySpreadConstraints(*deploy.Spec.Selector)...)
@@ -455,7 +441,7 @@ func (r *Reconciler) generatePGBouncerDeployment(
 	err := errors.WithStack(r.setControllerReference(cluster, deploy))
 
 	if err == nil {
-		pgbouncer.Pod(cluster, configmap, primaryCertificate, secret, &deploy.Spec.Template.Spec)
+		pgbouncer.Pod(ctx, cluster, configmap, primaryCertificate, secret, &deploy.Spec.Template.Spec)
 	}
 
 	return deploy, true, err
@@ -471,7 +457,7 @@ func (r *Reconciler) reconcilePGBouncerDeployment(
 	configmap *corev1.ConfigMap, secret *corev1.Secret,
 ) error {
 	deploy, specified, err := r.generatePGBouncerDeployment(
-		cluster, primaryCertificate, configmap, secret)
+		ctx, cluster, primaryCertificate, configmap, secret)
 
 	// Set observations whether the deployment exists or not.
 	defer func() {
@@ -520,7 +506,7 @@ func (r *Reconciler) reconcilePGBouncerDeployment(
 	return err
 }
 
-// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=create;patch;get;delete
+// +kubebuilder:rbac:groups="policy",resources="poddisruptionbudgets",verbs={create,patch,get,delete}
 
 // reconcilePGBouncerPodDisruptionBudget creates a PDB for the PGBouncer deployment.
 // A PDB will be created when minAvailable is determined to be greater than 0 and
