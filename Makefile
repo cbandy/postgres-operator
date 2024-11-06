@@ -217,6 +217,9 @@ check-envtest-existing: createnamespaces
 		$(GO_TEST) -count=1 -cover -p=1 ./...
 	kubectl delete -k ./config/dev
 
+check-chainsaw:
+	chainsaw test --config testing/chainsaw/e2e/config.yaml --values testing/chainsaw/e2e/values.yaml testing/chainsaw/e2e
+
 # Expects operator to be running
 .PHONY: check-kuttl
 check-kuttl: ## Run kuttl end-to-end tests
