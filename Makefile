@@ -21,6 +21,8 @@ GO_TEST ?= $(GO) test
 CONTROLLER ?= $(GO) tool sigs.k8s.io/controller-tools/cmd/controller-gen
 
 # Run tests using the latest tools.
+CHAINSAW ?= $(GO) run github.com/kyverno/chainsaw@latest
+CHAINSAW_TEST ?= $(CHAINSAW) test
 ENVTEST ?= $(GO) run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 KUTTL ?= $(GO) run github.com/kudobuilder/kuttl/pkg/kuttlctl/cmd/kubectl-kuttl@latest
 KUTTL_TEST ?= $(KUTTL) test
@@ -226,6 +228,10 @@ check-envtest-existing: createnamespaces
 	USE_EXISTING_CLUSTER=true PGO_NAMESPACE="postgres-operator" QUERIES_CONFIG_DIR="$(CURDIR)/${QUERIES_CONFIG_DIR}" \
 		$(GO_TEST) -count=1 -cover -p=1 ./...
 	kubectl delete -k ./config/dev
+
+.PHONY: check-chainsaw
+check-chainsaw:
+	$(CHAINSAW_TEST) --config testing/chainsaw/e2e/config.yaml --values testing/chainsaw/e2e/values.yaml testing/chainsaw/e2e
 
 # Expects operator to be running
 .PHONY: check-kuttl
