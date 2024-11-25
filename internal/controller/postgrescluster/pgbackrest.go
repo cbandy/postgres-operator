@@ -1193,6 +1193,8 @@ func (r *Reconciler) reconcileRestoreJob(ctx context.Context,
 		hugePagesSetting = "try"
 	}
 
+	// FIXME: decide what huge pages are requested.
+
 	// NOTE (andrewlecuyer): Forcing users to put each argument separately might prevent the need
 	// to do any escaping or use eval.
 	cmd := pgbackrest.RestoreCommand(pgdata, hugePagesSetting, config.FetchKeyCommand(&cluster.Spec),

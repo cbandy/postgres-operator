@@ -143,6 +143,15 @@ func TestInstancePod(t *testing.T) {
 	assert.Assert(t, cmp.MarshalMatches(template.Spec, `
 containers:
 - command:
+  - bash
+  - -ceu
+  - --
+  - |-
+    for limit in $(
+      compgen -G '/sys/fs/cgroup/hugetlb.*.max'
+      compgen -G '/sys/fs/cgroup/hugetlb/hugetlb.*.limit_in_bytes'
+    ); do echo 0 > "${limit}"; done; exec "$@"
+  - --
   - patroni
   - /etc/patroni
   env:

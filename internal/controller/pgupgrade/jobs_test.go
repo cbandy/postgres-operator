@@ -100,6 +100,10 @@ spec:
         - |-
           declare -r data_volume='/pgdata' old_version="$1" new_version="$2"
           printf 'Performing PostgreSQL upgrade from version "%s" to "%s" ...\n\n' "$@"
+          for limit in $(
+            compgen -G '/sys/fs/cgroup/hugetlb.*.max'
+            compgen -G '/sys/fs/cgroup/hugetlb/hugetlb.*.limit_in_bytes'
+          ); do echo 0 > "${limit}"; done
           gid=$(id -G); NSS_WRAPPER_GROUP=$(mktemp)
           (sed "/^postgres:x:/ d; /^[^:]*:x:${gid%% *}:/ d" /etc/group
           echo "postgres:x:${gid%% *}:") > "${NSS_WRAPPER_GROUP}"

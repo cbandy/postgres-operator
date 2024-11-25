@@ -17,6 +17,7 @@ import (
 
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/postgres"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -47,6 +48,8 @@ func upgradeCommand(upgrade *v1beta1.PGUpgrade, fetchKeyCommand string) []string
 	script := strings.Join([]string{
 		`declare -r data_volume='/pgdata' old_version="$1" new_version="$2"`,
 		`printf 'Performing PostgreSQL upgrade from version "%s" to "%s" ...\n\n' "$@"`,
+
+		postgres.HugePagesWorkaround(upgrade.Spec.Resources),
 
 		// Note: Rather than import the nss_wrapper init container, as we do in
 		// the main postgres-operator, this job does the required nss_wrapper
