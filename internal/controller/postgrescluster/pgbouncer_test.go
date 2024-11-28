@@ -573,7 +573,7 @@ func TestReconcilePGBouncerDisruptionBudget(t *testing.T) {
 		cluster.Namespace = ns.Name
 		cluster.Spec.Proxy.PGBouncer.Replicas = nil
 		assert.Error(t, r.reconcilePGBouncerPodDisruptionBudget(ctx, cluster),
-			"Replicas should be defined")
+			"replicas should be defined")
 	})
 
 	t.Run("not created", func(t *testing.T) {

@@ -6,14 +6,15 @@ package postgrescluster
 
 import (
 	"context"
+	"errors"
 	"strings"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/crunchydata/postgres-operator/internal/feature"
 	"github.com/crunchydata/postgres-operator/internal/logging"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -242,7 +243,7 @@ func getDesiredVolumeSize(cluster *v1beta1.PostgresCluster,
 	// the correct limit is identified.
 	case strings.HasPrefix(volumeType, "repo"):
 		if cluster.Status.PGBackRest == nil {
-			return "", errors.New("PostgresCluster.Status.PGBackRest is nil")
+			return "", tracing.Frame(errors.New("PostgresCluster.Status.PGBackRest is nil"))
 		}
 		for i := range cluster.Status.PGBackRest.Repos {
 			if volumeType == cluster.Status.PGBackRest.Repos[i].Name {

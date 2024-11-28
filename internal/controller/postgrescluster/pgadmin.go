@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,6 +22,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/naming"
 	"github.com/crunchydata/postgres-operator/internal/pgadmin"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -75,9 +75,9 @@ func (r *Reconciler) generatePGAdminConfigMap(
 			naming.LabelRole:    naming.RolePGAdmin,
 		})
 
-	err := errors.WithStack(pgadmin.ConfigMap(cluster, configmap))
+	err := tracing.Frame(pgadmin.ConfigMap(cluster, configmap))
 	if err == nil {
-		err = errors.WithStack(r.setControllerReference(cluster, configmap))
+		err = tracing.Frame(r.setControllerReference(cluster, configmap))
 	}
 
 	return configmap, true, err
@@ -96,15 +96,15 @@ func (r *Reconciler) reconcilePGAdminConfigMap(
 		// pgAdmin is disabled; delete the ConfigMap if it exists. Check the
 		// client cache first using Get.
 		key := client.ObjectKeyFromObject(configmap)
-		err := errors.WithStack(r.Reader.Get(ctx, key, configmap))
+		err := tracing.Frame(r.Reader.Get(ctx, key, configmap))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, configmap))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, configmap))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, configmap))
+		err = tracing.Frame(r.apply(ctx, configmap))
 	}
 	return configmap, err
 }
@@ -194,7 +194,7 @@ func (r *Reconciler) generatePGAdminService(
 	}
 	service.Spec.Ports = []corev1.ServicePort{servicePort}
 
-	err := errors.WithStack(r.setControllerReference(cluster, service))
+	err := tracing.Frame(r.setControllerReference(cluster, service))
 
 	return service, true, err
 }
@@ -212,15 +212,15 @@ func (r *Reconciler) reconcilePGAdminService(
 		// pgAdmin is disabled; delete the Service if it exists. Check the client
 		// cache first using Get.
 		key := client.ObjectKeyFromObject(service)
-		err := errors.WithStack(r.Reader.Get(ctx, key, service))
+		err := tracing.Frame(r.Reader.Get(ctx, key, service))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, service))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, service))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		err = tracing.Frame(r.apply(ctx, service))
 	}
 	return service, err
 }
@@ -240,9 +240,9 @@ func (r *Reconciler) reconcilePGAdminStatefulSet(
 		// pgAdmin is disabled; delete the Deployment if it exists. Check the
 		// client cache first using Get.
 		key := client.ObjectKeyFromObject(sts)
-		err := errors.WithStack(r.Reader.Get(ctx, key, sts))
+		err := tracing.Frame(r.Reader.Get(ctx, key, sts))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, sts))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, sts))
 		}
 		return client.IgnoreNotFound(err)
 	}
@@ -333,7 +333,7 @@ func (r *Reconciler) reconcilePGAdminStatefulSet(
 	// When we delete the StatefulSet, we will leave its Pods in place. They will be claimed by
 	// the StatefulSet that gets created in the next reconcile.
 	existing := &appsv1.StatefulSet{}
-	if err := errors.WithStack(r.Reader.Get(ctx, client.ObjectKeyFromObject(sts), existing)); err != nil {
+	if err := tracing.Frame(r.Reader.Get(ctx, client.ObjectKeyFromObject(sts), existing)); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return err
 		}
@@ -346,11 +346,11 @@ func (r *Reconciler) reconcilePGAdminStatefulSet(
 			exactly := client.Preconditions{UID: &uid, ResourceVersion: &version}
 			propagate := client.PropagationPolicy(metav1.DeletePropagationOrphan)
 
-			return errors.WithStack(client.IgnoreNotFound(r.Writer.Delete(ctx, existing, exactly, propagate)))
+			return tracing.Frame(client.IgnoreNotFound(r.Writer.Delete(ctx, existing, exactly, propagate)))
 		}
 	}
 
-	if err := errors.WithStack(r.setControllerReference(cluster, sts)); err != nil {
+	if err := tracing.Frame(r.setControllerReference(cluster, sts)); err != nil {
 		return err
 	}
 
@@ -367,7 +367,7 @@ func (r *Reconciler) reconcilePGAdminStatefulSet(
 	// volume mount to all containers included within that spec
 	AddTMPEmptyDir(&sts.Spec.Template)
 
-	return errors.WithStack(r.apply(ctx, sts))
+	return tracing.Frame(r.apply(ctx, sts))
 }
 
 // +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={create,patch}
@@ -391,9 +391,9 @@ func (r *Reconciler) reconcilePGAdminDataVolume(
 		// pgAdmin is disabled; delete the PVC if it exists. Check the client
 		// cache first using Get.
 		key := client.ObjectKeyFromObject(pvc)
-		err := errors.WithStack(r.Reader.Get(ctx, key, pvc))
+		err := tracing.Frame(r.Reader.Get(ctx, key, pvc))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, pvc))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, pvc))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
@@ -407,11 +407,11 @@ func (r *Reconciler) reconcilePGAdminDataVolume(
 	)
 	pvc.Spec = cluster.Spec.UserInterface.PGAdmin.DataVolumeClaimSpec.AsPersistentVolumeClaimSpec()
 
-	err := errors.WithStack(r.setControllerReference(cluster, pvc))
+	err := tracing.Frame(r.setControllerReference(cluster, pvc))
 
 	if err == nil {
 		err = r.handlePersistentVolumeClaimError(cluster,
-			errors.WithStack(r.apply(ctx, pvc)))
+			tracing.Frame(r.apply(ctx, pvc)))
 	}
 
 	return pvc, err
@@ -439,7 +439,7 @@ func (r *Reconciler) reconcilePGAdminUsers(
 	pod := &corev1.Pod{ObjectMeta: naming.ClusterPGAdmin(cluster)}
 	pod.Name += "-0"
 
-	err := errors.WithStack(r.Reader.Get(ctx, client.ObjectKeyFromObject(pod), pod))
+	err := tracing.Frame(r.Reader.Get(ctx, client.ObjectKeyFromObject(pod), pod))
 	if err != nil {
 		return client.IgnoreNotFound(err)
 	}
@@ -502,7 +502,7 @@ func (r *Reconciler) reconcilePGAdminUsers(
 
 	if err == nil {
 		log := logging.FromContext(ctx).WithValues("revision", revision)
-		err = errors.WithStack(write(logging.NewContext(ctx, log), podExecutor))
+		err = tracing.Frame(write(logging.NewContext(ctx, log), podExecutor))
 	}
 	if err == nil {
 		if cluster.Status.UserInterface == nil {

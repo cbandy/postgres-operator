@@ -12,7 +12,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/pgmonitor"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
 	pgpassword "github.com/crunchydata/postgres-operator/internal/postgres/password"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/internal/util"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
@@ -152,7 +152,7 @@ func (r *Reconciler) reconcileMonitoringSecret(
 	cluster *v1beta1.PostgresCluster) (*corev1.Secret, error) {
 
 	existing := &corev1.Secret{ObjectMeta: naming.MonitoringUserSecret(cluster)}
-	err := errors.WithStack(
+	err := tracing.Frame(
 		r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing))
 	if client.IgnoreNotFound(err) != nil {
 		return nil, err
@@ -164,7 +164,7 @@ func (r *Reconciler) reconcileMonitoringSecret(
 	// uses the monitoring user as well.
 	if !pgmonitor.ExporterEnabled(ctx, cluster) && !collector.OpenTelemetryMetricsEnabled(ctx, cluster) {
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, existing))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, existing))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
@@ -208,14 +208,14 @@ func (r *Reconciler) reconcileMonitoringSecret(
 	if len(intent.Data["verifier"]) == 0 {
 		verifier, err := pgpassword.NewSCRAMPassword(string(intent.Data["password"])).Build()
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, tracing.Frame(err)
 		}
 		intent.Data["verifier"] = []byte(verifier)
 	}
 
-	err = errors.WithStack(r.setControllerReference(cluster, intent))
+	err = tracing.Frame(r.setControllerReference(cluster, intent))
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		err = tracing.Frame(r.apply(ctx, intent))
 	}
 	if err == nil {
 		return intent, nil
@@ -380,7 +380,7 @@ func (r *Reconciler) reconcileExporterWebConfig(ctx context.Context,
 	}
 
 	existing := &corev1.ConfigMap{ObjectMeta: naming.ExporterWebConfigMap(cluster)}
-	err := errors.WithStack(r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing))
+	err := tracing.Frame(r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing))
 	if client.IgnoreNotFound(err) != nil {
 		return nil, err
 	}
@@ -391,7 +391,7 @@ func (r *Reconciler) reconcileExporterWebConfig(ctx context.Context,
 		// We could still have a NotFound error here so check the err.
 		// If no error that means the configmap is found and needs to be deleted
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, existing))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, existing))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
@@ -423,9 +423,9 @@ tls_server_config:
 
 	intent.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
 
-	err = errors.WithStack(r.setControllerReference(cluster, intent))
+	err = tracing.Frame(r.setControllerReference(cluster, intent))
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		err = tracing.Frame(r.apply(ctx, intent))
 	}
 	if err == nil {
 		return intent, nil
@@ -439,7 +439,7 @@ func (r *Reconciler) reconcileExporterQueriesConfig(ctx context.Context,
 	cluster *v1beta1.PostgresCluster) (*corev1.ConfigMap, error) {
 
 	existing := &corev1.ConfigMap{ObjectMeta: naming.ExporterQueriesConfigMap(cluster)}
-	err := errors.WithStack(r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing))
+	err := tracing.Frame(r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing))
 	if client.IgnoreNotFound(err) != nil {
 		return nil, err
 	}
@@ -448,7 +448,7 @@ func (r *Reconciler) reconcileExporterQueriesConfig(ctx context.Context,
 		// We could still have a NotFound error here so check the err.
 		// If no error that means the configmap is found and needs to be deleted
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, existing))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, existing))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
@@ -470,9 +470,9 @@ func (r *Reconciler) reconcileExporterQueriesConfig(ctx context.Context,
 
 	intent.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
 
-	err = errors.WithStack(r.setControllerReference(cluster, intent))
+	err = tracing.Frame(r.setControllerReference(cluster, intent))
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		err = tracing.Frame(r.apply(ctx, intent))
 	}
 	if err == nil {
 		return intent, nil

@@ -6,10 +6,10 @@ package postgrescluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
-	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -25,6 +25,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/pgbouncer"
 	"github.com/crunchydata/postgres-operator/internal/pki"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/internal/util"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
@@ -97,14 +98,14 @@ func (r *Reconciler) reconcilePGBouncerConfigMap(
 		// PgBouncer is disabled; delete the ConfigMap if it exists. Check the
 		// client cache first using Get.
 		key := client.ObjectKeyFromObject(configmap)
-		err := errors.WithStack(r.Reader.Get(ctx, key, configmap))
+		err := tracing.Frame(r.Reader.Get(ctx, key, configmap))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, configmap))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, configmap))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
 
-	err := errors.WithStack(r.setControllerReference(cluster, configmap))
+	err := tracing.Frame(r.setControllerReference(cluster, configmap))
 
 	configmap.Annotations = naming.Merge(
 		cluster.Spec.Metadata.GetAnnotationsOrNil(),
@@ -134,7 +135,7 @@ func (r *Reconciler) reconcilePGBouncerConfigMap(
 			[]collector.LogrotateConfig{logrotateConfig})
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, configmap))
+		err = tracing.Frame(r.apply(ctx, configmap))
 	}
 
 	return configmap, err
@@ -168,12 +169,12 @@ func (r *Reconciler) reconcilePGBouncerInPostgreSQL(
 	// PgBouncer objects.
 
 	action := func(ctx context.Context, exec postgres.Executor) error {
-		return errors.WithStack(pgbouncer.EnableInPostgreSQL(ctx, exec, clusterSecret))
+		return tracing.Frame(pgbouncer.EnableInPostgreSQL(ctx, exec, clusterSecret))
 	}
 	if cluster.Spec.Proxy == nil || cluster.Spec.Proxy.PGBouncer == nil {
 		// PgBouncer is disabled.
 		action = func(ctx context.Context, exec postgres.Executor) error {
-			return errors.WithStack(pgbouncer.DisableInPostgreSQL(ctx, exec))
+			return tracing.Frame(pgbouncer.DisableInPostgreSQL(ctx, exec))
 		}
 	}
 
@@ -229,7 +230,7 @@ func (r *Reconciler) reconcilePGBouncerSecret(
 	root *pki.RootCertificateAuthority, service *corev1.Service,
 ) (*corev1.Secret, error) {
 	existing := &corev1.Secret{ObjectMeta: naming.ClusterPGBouncer(cluster)}
-	err := errors.WithStack(
+	err := tracing.Frame(
 		r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing))
 	if client.IgnoreNotFound(err) != nil {
 		return nil, err
@@ -238,7 +239,7 @@ func (r *Reconciler) reconcilePGBouncerSecret(
 	if cluster.Spec.Proxy == nil || cluster.Spec.Proxy.PGBouncer == nil {
 		// PgBouncer is disabled; delete the Secret if it exists.
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, existing))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, existing))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
@@ -250,7 +251,7 @@ func (r *Reconciler) reconcilePGBouncerSecret(
 	intent.Type = corev1.SecretTypeOpaque
 
 	if err == nil {
-		err = errors.WithStack(r.setControllerReference(cluster, intent))
+		err = tracing.Frame(r.setControllerReference(cluster, intent))
 	}
 
 	intent.Annotations = naming.Merge(
@@ -268,7 +269,7 @@ func (r *Reconciler) reconcilePGBouncerSecret(
 		err = pgbouncer.Secret(ctx, cluster, root, existing, service, intent)
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		err = tracing.Frame(r.apply(ctx, intent))
 	}
 
 	return intent, err
@@ -356,7 +357,7 @@ func (r *Reconciler) generatePGBouncerService(
 	}
 	service.Spec.Ports = []corev1.ServicePort{servicePort}
 
-	err := errors.WithStack(r.setControllerReference(cluster, service))
+	err := tracing.Frame(r.setControllerReference(cluster, service))
 
 	return service, true, err
 }
@@ -374,15 +375,15 @@ func (r *Reconciler) reconcilePGBouncerService(
 		// PgBouncer is disabled; delete the Service if it exists. Check the client
 		// cache first using Get.
 		key := client.ObjectKeyFromObject(service)
-		err := errors.WithStack(r.Reader.Get(ctx, key, service))
+		err := tracing.Frame(r.Reader.Get(ctx, key, service))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, service))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, service))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		err = tracing.Frame(r.apply(ctx, service))
 	}
 	return service, err
 }
@@ -496,7 +497,7 @@ func (r *Reconciler) generatePGBouncerDeployment(
 	// set the image pull secrets, if any exist
 	deploy.Spec.Template.Spec.ImagePullSecrets = cluster.Spec.ImagePullSecrets
 
-	err := errors.WithStack(r.setControllerReference(cluster, deploy))
+	err := tracing.Frame(r.setControllerReference(cluster, deploy))
 
 	if err == nil {
 		pgbouncer.Pod(ctx, cluster, configmap, primaryCertificate, secret, &deploy.Spec.Template, logfile)
@@ -565,15 +566,15 @@ func (r *Reconciler) reconcilePGBouncerDeployment(
 		// PgBouncer is disabled; delete the Deployment if it exists. Check the
 		// client cache first using Get.
 		key := client.ObjectKeyFromObject(deploy)
-		err := errors.WithStack(r.Reader.Get(ctx, key, deploy))
+		err := tracing.Frame(r.Reader.Get(ctx, key, deploy))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, deploy))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, deploy))
 		}
 		return client.IgnoreNotFound(err)
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, deploy))
+		err = tracing.Frame(r.apply(ctx, deploy))
 	}
 	return err
 }
@@ -590,9 +591,9 @@ func (r *Reconciler) reconcilePGBouncerPodDisruptionBudget(
 ) error {
 	deleteExistingPDB := func(cluster *v1beta1.PostgresCluster) error {
 		existing := &policyv1.PodDisruptionBudget{ObjectMeta: naming.ClusterPGBouncer(cluster)}
-		err := errors.WithStack(r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing))
+		err := tracing.Frame(r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, existing))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, existing))
 		}
 		return client.IgnoreNotFound(err)
 	}
@@ -603,7 +604,7 @@ func (r *Reconciler) reconcilePGBouncerPodDisruptionBudget(
 
 	if cluster.Spec.Proxy.PGBouncer.Replicas == nil {
 		// Replicas should always have a value because of defaults in the spec
-		return errors.New("Replicas should be defined")
+		return tracing.Frame(errors.New("replicas should be defined"))
 	}
 	minAvailable := getMinAvailable(cluster.Spec.Proxy.PGBouncer.MinAvailable,
 		*cluster.Spec.Proxy.PGBouncer.Replicas)
@@ -633,7 +634,7 @@ func (r *Reconciler) reconcilePGBouncerPodDisruptionBudget(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, pdb))
+		err = tracing.Frame(r.apply(ctx, pdb))
 	}
 	return err
 }

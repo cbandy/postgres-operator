@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pkg/errors"
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -437,7 +436,7 @@ func (r *PGUpgradeReconciler) Reconcile(ctx context.Context, upgrade *v1beta1.PG
 
 	// TODO: error from apply could mean that the job exists with a different spec.
 	if err == nil && !upgradeJobComplete {
-		err = errors.WithStack(r.apply(ctx,
+		err = tracing.Frame(r.apply(ctx,
 			r.generateUpgradeJob(ctx, upgrade, world.ClusterPrimary, config.FetchKeyCommand(&world.Cluster.Spec))))
 	}
 

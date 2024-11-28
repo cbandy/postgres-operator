@@ -7,7 +7,6 @@ package standalone_pgadmin
 import (
 	"context"
 
-	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -18,6 +17,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/controller/postgrescluster"
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/internal/util"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
@@ -35,7 +35,7 @@ func (r *PGAdminReconciler) reconcilePGAdminStatefulSet(
 	// When we delete the StatefulSet, we will leave its Pods in place. They will be claimed by
 	// the StatefulSet that gets created in the next reconcile.
 	existing := &appsv1.StatefulSet{}
-	if err := errors.WithStack(r.Reader.Get(ctx, client.ObjectKeyFromObject(sts), existing)); err != nil {
+	if err := tracing.Frame(r.Reader.Get(ctx, client.ObjectKeyFromObject(sts), existing)); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return err
 		}
@@ -48,14 +48,14 @@ func (r *PGAdminReconciler) reconcilePGAdminStatefulSet(
 			exactly := client.Preconditions{UID: &uid, ResourceVersion: &version}
 			propagate := client.PropagationPolicy(metav1.DeletePropagationOrphan)
 
-			return errors.WithStack(client.IgnoreNotFound(r.Writer.Delete(ctx, existing, exactly, propagate)))
+			return tracing.Frame(client.IgnoreNotFound(r.Writer.Delete(ctx, existing, exactly, propagate)))
 		}
 	}
 
-	if err := errors.WithStack(r.setControllerReference(pgadmin, sts)); err != nil {
+	if err := tracing.Frame(r.setControllerReference(pgadmin, sts)); err != nil {
 		return err
 	}
-	return errors.WithStack(r.apply(ctx, sts))
+	return tracing.Frame(r.apply(ctx, sts))
 }
 
 // statefulset defines the StatefulSet needed to run pgAdmin.

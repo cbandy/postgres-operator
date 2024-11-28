@@ -6,11 +6,11 @@ package postgrescluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -22,6 +22,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/patroni"
 	"github.com/crunchydata/postgres-operator/internal/pki"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -36,7 +37,7 @@ func (r *Reconciler) deletePatroniArtifacts(
 
 	selector, err := naming.AsSelector(naming.ClusterPatronis(cluster))
 	if err == nil {
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Writer.DeleteAllOf(ctx, &corev1.Endpoints{},
 				client.InNamespace(cluster.Namespace),
 				client.MatchingLabelsSelector{Selector: selector},
@@ -94,7 +95,7 @@ func (r *Reconciler) handlePatroniRestarts(
 			return r.PodExec(ctx, pod.Namespace, pod.Name, container, stdin, stdout, stderr, command...)
 		})
 
-		return errors.WithStack(exec.RestartPendingMembers(ctx, "primary", naming.PatroniScope(cluster)))
+		return tracing.Frame(exec.RestartPendingMembers(ctx, "primary", naming.PatroniScope(cluster)))
 	}
 
 	// When the primary does not need to restart but a replica does, restart all
@@ -119,7 +120,7 @@ func (r *Reconciler) handlePatroniRestarts(
 			return r.PodExec(ctx, pod.Namespace, pod.Name, container, stdin, stdout, stderr, command...)
 		})
 
-		return errors.WithStack(exec.RestartPendingMembers(ctx, "replica", naming.PatroniScope(cluster)))
+		return tracing.Frame(exec.RestartPendingMembers(ctx, "replica", naming.PatroniScope(cluster)))
 	}
 
 	// Nothing needs to restart.
@@ -143,7 +144,7 @@ func (r *Reconciler) reconcilePatroniDistributedConfiguration(
 	dcsService := &corev1.Service{ObjectMeta: naming.PatroniDistributedConfiguration(cluster)}
 	dcsService.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
 
-	err := errors.WithStack(r.setControllerReference(cluster, dcsService))
+	err := tracing.Frame(r.setControllerReference(cluster, dcsService))
 
 	dcsService.Annotations = naming.Merge(
 		cluster.Spec.Metadata.GetAnnotationsOrNil())
@@ -160,7 +161,7 @@ func (r *Reconciler) reconcilePatroniDistributedConfiguration(
 	dcsService.Spec.Selector = nil
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, dcsService))
+		err = tracing.Frame(r.apply(ctx, dcsService))
 	}
 
 	// TODO(cbandy): DCS "failover_path"; `failover` and `switchover` create "{scope}-failover" endpoints.
@@ -204,7 +205,7 @@ func (r *Reconciler) reconcilePatroniDynamicConfiguration(
 		return r.PodExec(ctx, pod.Namespace, pod.Name, naming.ContainerDatabase, stdin, stdout, stderr, command...)
 	}
 
-	return errors.WithStack(
+	return tracing.Frame(
 		patroni.Executor(exec).ReplaceConfiguration(ctx,
 			patroni.DynamicConfiguration(&cluster.Spec, pgHBAs, pgParameters)))
 }
@@ -282,7 +283,7 @@ func (r *Reconciler) generatePatroniLeaderLeaseService(
 	}
 	service.Spec.Ports = []corev1.ServicePort{servicePort}
 
-	err := errors.WithStack(r.setControllerReference(cluster, service))
+	err := tracing.Frame(r.setControllerReference(cluster, service))
 	return service, err
 }
 
@@ -300,7 +301,7 @@ func (r *Reconciler) reconcilePatroniLeaderLease(
 	// - https://releases.k8s.io/v1.20.0/pkg/controller/endpoint/endpoints_controller.go#L580
 	service, err := r.generatePatroniLeaderLeaseService(cluster)
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		err = tracing.Frame(r.apply(ctx, service))
 	}
 	return service, err
 }
@@ -323,7 +324,7 @@ func (r *Reconciler) reconcilePatroniStatus(
 	}
 
 	dcs := &corev1.Endpoints{ObjectMeta: naming.PatroniDistributedConfiguration(cluster)}
-	err := errors.WithStack(client.IgnoreNotFound(
+	err := tracing.Frame(client.IgnoreNotFound(
 		r.Reader.Get(ctx, client.ObjectKeyFromObject(dcs), dcs)))
 
 	if err == nil {
@@ -362,13 +363,13 @@ func (r *Reconciler) reconcileReplicationSecret(
 			Name:      cluster.Spec.CustomReplicationClientTLSSecret.Name,
 			Namespace: cluster.Namespace,
 		}}
-		err := errors.WithStack(r.Reader.Get(ctx,
+		err := tracing.Frame(r.Reader.Get(ctx,
 			client.ObjectKeyFromObject(custom), custom))
 		return custom, err
 	}
 
 	existing := &corev1.Secret{ObjectMeta: naming.ReplicationClientCertSecret(cluster)}
-	err := errors.WithStack(client.IgnoreNotFound(
+	err := tracing.Frame(client.IgnoreNotFound(
 		r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing)))
 
 	leaf := &pki.LeafCertificate{}
@@ -382,8 +383,7 @@ func (r *Reconciler) reconcileReplicationSecret(
 		_ = leaf.Certificate.UnmarshalText(existing.Data[naming.ReplicationCert])
 		_ = leaf.PrivateKey.UnmarshalText(existing.Data[naming.ReplicationPrivateKey])
 
-		leaf, err = root.RegenerateLeafWhenNecessary(leaf, commonName, dnsNames)
-		err = errors.WithStack(err)
+		leaf, err = tracing.Frame2(root.RegenerateLeafWhenNecessary(leaf, commonName, dnsNames))
 	}
 
 	intent := &corev1.Secret{ObjectMeta: naming.ReplicationClientCertSecret(cluster)}
@@ -400,23 +400,20 @@ func (r *Reconciler) reconcileReplicationSecret(
 			naming.LabelClusterCertificate: "replication-client-tls",
 		})
 
-	if err := errors.WithStack(r.setControllerReference(cluster, intent)); err != nil {
+	if err := tracing.Frame(r.setControllerReference(cluster, intent)); err != nil {
 		return nil, err
 	}
 	if err == nil {
-		intent.Data[naming.ReplicationCert], err = leaf.Certificate.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[naming.ReplicationCert], err = tracing.Frame2(leaf.Certificate.MarshalText())
 	}
 	if err == nil {
-		intent.Data[naming.ReplicationPrivateKey], err = leaf.PrivateKey.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[naming.ReplicationPrivateKey], err = tracing.Frame2(leaf.PrivateKey.MarshalText())
 	}
 	if err == nil {
-		intent.Data[naming.ReplicationCACert], err = root.Certificate.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[naming.ReplicationCACert], err = tracing.Frame2(root.Certificate.MarshalText())
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		err = tracing.Frame(r.apply(ctx, intent))
 	}
 	return intent, err
 }
@@ -479,14 +476,14 @@ func (r *Reconciler) reconcilePatroniSwitchover(ctx context.Context,
 	if len(instances.forCluster) <= 1 {
 		// TODO: event
 		// TODO: Possible webhook validation
-		return errors.New("Need more than one instance to switchover")
+		return tracing.Frame(errors.New("need more than one instance to switchover"))
 	}
 
 	// 	 TODO: Add webhook validation that requires a targetInstance when requesting failover
 	if spec.Type == v1beta1.PatroniSwitchoverTypeFailover {
 		if spec.TargetInstance == nil || *spec.TargetInstance == "" {
 			// TODO: event
-			return errors.New("TargetInstance required when running failover")
+			return tracing.Frame(errors.New("targetInstance required when running failover"))
 		}
 	}
 
@@ -501,12 +498,12 @@ func (r *Reconciler) reconcilePatroniSwitchover(ctx context.Context,
 		}
 		if targetInstance == nil {
 			// TODO: event
-			return errors.New("TargetInstance was specified but not found in the cluster")
+			return tracing.Frame(errors.New("targetInstance was specified but not found in the cluster"))
 		}
 		if len(targetInstance.Pods) != 1 {
 			// We expect that a target instance should have one associated pod.
-			return errors.Errorf(
-				"TargetInstance should have one pod. Pods (%d)", len(targetInstance.Pods))
+			return tracing.Frame(fmt.Errorf(
+				"targetInstance should have one pod. Pods (%d)", len(targetInstance.Pods)))
 		}
 	} else {
 		log.V(1).Info("TargetInstance not provided")
@@ -523,7 +520,7 @@ func (r *Reconciler) reconcilePatroniSwitchover(ctx context.Context,
 		}
 	}
 	if runningPod == nil {
-		return errors.New("Could not find a running pod when attempting switchover.")
+		return tracing.Frame(errors.New("could not find a running pod when attempting switchover"))
 	}
 	exec := func(_ context.Context, stdin io.Reader, stdout, stderr io.Writer,
 		command ...string) error {
@@ -543,7 +540,7 @@ func (r *Reconciler) reconcilePatroniSwitchover(ctx context.Context,
 	}
 
 	if timeline == 0 {
-		return errors.New("error getting and parsing current timeline")
+		return tracing.Frame(errors.New("error getting and parsing current timeline"))
 	}
 
 	statusTimeline := cluster.Status.Patroni.SwitchoverTimeline
@@ -573,15 +570,13 @@ func (r *Reconciler) reconcilePatroniSwitchover(ctx context.Context,
 	// In the default case we will be using SwitchoverAndWait. This API call uses
 	// a Patronictl switchover to move to the target instance.
 	action := func(ctx context.Context, exec patroni.Executor, next string) (bool, error) {
-		success, err := exec.SwitchoverAndWait(ctx, next)
-		return success, errors.WithStack(err)
+		return tracing.Frame2(exec.SwitchoverAndWait(ctx, next))
 	}
 
 	if spec.Type == v1beta1.PatroniSwitchoverTypeFailover {
 		// When a failover has been requested we use FailoverAndWait to change the primary.
 		action = func(ctx context.Context, exec patroni.Executor, next string) (bool, error) {
-			success, err := exec.FailoverAndWait(ctx, next)
-			return success, errors.WithStack(err)
+			return tracing.Frame2(exec.FailoverAndWait(ctx, next))
 		}
 	}
 
@@ -591,9 +586,9 @@ func (r *Reconciler) reconcilePatroniSwitchover(ctx context.Context,
 		nextPrimary = targetInstance.Pods[0].Name
 	}
 
-	success, err := action(ctx, exec, nextPrimary)
-	if err = errors.WithStack(err); err == nil && !success {
-		err = errors.New("unable to switchover")
+	success, err := tracing.Frame2(action(ctx, exec, nextPrimary))
+	if err == nil && !success {
+		err = tracing.Frame(errors.New("unable to switchover"))
 	}
 
 	// If we've reached this point, a switchover has successfully been triggered

@@ -7,13 +7,13 @@ package postgrescluster
 import (
 	"context"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
 	"github.com/crunchydata/postgres-operator/internal/patroni"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -46,12 +46,12 @@ func (r *Reconciler) reconcileInstanceRBAC(
 	role := &rbacv1.Role{ObjectMeta: naming.ClusterInstanceRBAC(cluster)}
 	role.SetGroupVersionKind(rbacv1.SchemeGroupVersion.WithKind("Role"))
 
-	err := errors.WithStack(r.setControllerReference(cluster, account))
+	err := tracing.Frame(r.setControllerReference(cluster, account))
 	if err == nil {
-		err = errors.WithStack(r.setControllerReference(cluster, binding))
+		err = tracing.Frame(r.setControllerReference(cluster, binding))
 	}
 	if err == nil {
-		err = errors.WithStack(r.setControllerReference(cluster, role))
+		err = tracing.Frame(r.setControllerReference(cluster, role))
 	}
 
 	account.Annotations = naming.Merge(cluster.Spec.Metadata.GetAnnotationsOrNil())
@@ -83,13 +83,13 @@ func (r *Reconciler) reconcileInstanceRBAC(
 	role.Rules = patroni.Permissions(cluster)
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, account))
+		err = tracing.Frame(r.apply(ctx, account))
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, role))
+		err = tracing.Frame(r.apply(ctx, role))
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, binding))
+		err = tracing.Frame(r.apply(ctx, binding))
 	}
 
 	return account, err

@@ -7,13 +7,13 @@ package postgrescluster
 import (
 	"context"
 
-	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/naming"
 	"github.com/crunchydata/postgres-operator/internal/pki"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -41,7 +41,7 @@ func (r *Reconciler) reconcileRootCertificate(
 
 	existing := &corev1.Secret{}
 	existing.Namespace, existing.Name = cluster.Namespace, naming.RootCertSecret
-	err := errors.WithStack(client.IgnoreNotFound(
+	err := tracing.Frame(client.IgnoreNotFound(
 		r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing)))
 
 	root := &pki.RootCertificateAuthority{}
@@ -54,8 +54,7 @@ func (r *Reconciler) reconcileRootCertificate(
 		_ = root.PrivateKey.UnmarshalText(existing.Data[keyPrivateKey])
 
 		if !pki.RootIsValid(root) {
-			root, err = pki.NewRootCertificateAuthority()
-			err = errors.WithStack(err)
+			root, err = tracing.Frame2(pki.NewRootCertificateAuthority())
 		}
 	}
 
@@ -75,18 +74,16 @@ func (r *Reconciler) reconcileRootCertificate(
 	// collection, but avoids any errors related to setting multiple controllers.
 	// https://docs.k8s.io/concepts/workloads/controllers/garbage-collection/#owners-and-dependents
 	if err == nil {
-		err = errors.WithStack(r.setOwnerReference(cluster, intent))
+		err = tracing.Frame(r.setOwnerReference(cluster, intent))
 	}
 	if err == nil {
-		intent.Data[keyCertificate], err = root.Certificate.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[keyCertificate], err = tracing.Frame2(root.Certificate.MarshalText())
 	}
 	if err == nil {
-		intent.Data[keyPrivateKey], err = root.PrivateKey.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[keyPrivateKey], err = tracing.Frame2(root.PrivateKey.MarshalText())
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		err = tracing.Frame(r.apply(ctx, intent))
 	}
 
 	return root, err
@@ -119,7 +116,7 @@ func (r *Reconciler) reconcileClusterCertificate(
 	const keyCertificate, keyPrivateKey, rootCA = "tls.crt", "tls.key", "ca.crt"
 
 	existing := &corev1.Secret{ObjectMeta: naming.PostgresTLSSecret(cluster)}
-	err := errors.WithStack(client.IgnoreNotFound(
+	err := tracing.Frame(client.IgnoreNotFound(
 		r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing)))
 
 	leaf := &pki.LeafCertificate{}
@@ -133,8 +130,7 @@ func (r *Reconciler) reconcileClusterCertificate(
 		_ = leaf.Certificate.UnmarshalText(existing.Data[keyCertificate])
 		_ = leaf.PrivateKey.UnmarshalText(existing.Data[keyPrivateKey])
 
-		leaf, err = root.RegenerateLeafWhenNecessary(leaf, dnsFQDN, dnsNames)
-		err = errors.WithStack(err)
+		leaf, err = tracing.Frame2(root.RegenerateLeafWhenNecessary(leaf, dnsFQDN, dnsNames))
 	}
 
 	intent := &corev1.Secret{ObjectMeta: naming.PostgresTLSSecret(cluster)}
@@ -151,20 +147,17 @@ func (r *Reconciler) reconcileClusterCertificate(
 		})
 
 	if err == nil {
-		err = errors.WithStack(r.setControllerReference(cluster, intent))
+		err = tracing.Frame(r.setControllerReference(cluster, intent))
 	}
 
 	if err == nil {
-		intent.Data[keyCertificate], err = leaf.Certificate.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[keyCertificate], err = tracing.Frame2(leaf.Certificate.MarshalText())
 	}
 	if err == nil {
-		intent.Data[keyPrivateKey], err = leaf.PrivateKey.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[keyPrivateKey], err = tracing.Frame2(leaf.PrivateKey.MarshalText())
 	}
 	if err == nil {
-		intent.Data[rootCA], err = root.Certificate.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[rootCA], err = tracing.Frame2(root.Certificate.MarshalText())
 	}
 
 	// TODO(tjmoore4): The generated postgrescluster secret is only created
@@ -172,7 +165,7 @@ func (r *Reconciler) reconcileClusterCertificate(
 	// initially created and a custom secret is later used, the generated
 	// secret is currently left in place.
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		err = tracing.Frame(r.apply(ctx, intent))
 	}
 
 	return clusterCertSecretProjection(intent), err
@@ -212,17 +205,14 @@ func (*Reconciler) instanceCertificate(
 		_ = leaf.Certificate.UnmarshalText(existing.Data[keyCertificate])
 		_ = leaf.PrivateKey.UnmarshalText(existing.Data[keyPrivateKey])
 
-		leaf, err = root.RegenerateLeafWhenNecessary(leaf, dnsFQDN, dnsNames)
-		err = errors.WithStack(err)
+		leaf, err = tracing.Frame2(root.RegenerateLeafWhenNecessary(leaf, dnsFQDN, dnsNames))
 	}
 
 	if err == nil {
-		intent.Data[keyCertificate], err = leaf.Certificate.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[keyCertificate], err = tracing.Frame2(leaf.Certificate.MarshalText())
 	}
 	if err == nil {
-		intent.Data[keyPrivateKey], err = leaf.PrivateKey.MarshalText()
-		err = errors.WithStack(err)
+		intent.Data[keyPrivateKey], err = tracing.Frame2(leaf.PrivateKey.MarshalText())
 	}
 
 	return leaf, err

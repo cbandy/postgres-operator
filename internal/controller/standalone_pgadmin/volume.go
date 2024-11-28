@@ -6,8 +6,8 @@ package standalone_pgadmin
 
 import (
 	"context"
+	"errors"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -28,11 +29,11 @@ func (r *PGAdminReconciler) reconcilePGAdminDataVolume(
 
 	pvc := pvc(pgadmin)
 
-	err := errors.WithStack(r.setControllerReference(pgadmin, pvc))
+	err := tracing.Frame(r.setControllerReference(pgadmin, pvc))
 
 	if err == nil {
 		err = r.handlePersistentVolumeClaimError(pgadmin,
-			errors.WithStack(r.apply(ctx, pvc)))
+			tracing.Frame(r.apply(ctx, pvc)))
 	}
 
 	return pvc, err

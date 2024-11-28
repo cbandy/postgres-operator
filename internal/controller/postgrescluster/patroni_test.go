@@ -636,7 +636,7 @@ func TestReconcilePatroniSwitchover(t *testing.T) {
 				desc:    "failover requested without a target",
 				enabled: true, trigger: "triggered", soType: "Failover",
 				check: func(t *testing.T, err error, cluster *v1beta1.PostgresCluster) {
-					assert.Error(t, err, "TargetInstance required when running failover")
+					assert.Error(t, err, "targetInstance required when running failover")
 					assert.Equal(t, *cluster.Status.Patroni.SwitchoverTimeline, int64(2))
 					assert.Assert(t, cluster.Status.Patroni.Switchover == nil)
 				},
@@ -645,7 +645,7 @@ func TestReconcilePatroniSwitchover(t *testing.T) {
 				desc:    "target instance was specified but not found",
 				enabled: true, trigger: "triggered", target: "bad-target",
 				check: func(t *testing.T, err error, cluster *v1beta1.PostgresCluster) {
-					assert.Error(t, err, "TargetInstance was specified but not found in the cluster")
+					assert.Error(t, err, "targetInstance was specified but not found in the cluster")
 					assert.Equal(t, *cluster.Status.Patroni.SwitchoverTimeline, int64(2))
 					assert.Assert(t, cluster.Status.Patroni.Switchover == nil)
 				},
@@ -710,7 +710,7 @@ func TestReconcilePatroniSwitchover(t *testing.T) {
 			observed := &observedInstances{forCluster: instances}
 
 			assert.Error(t, r.reconcilePatroniSwitchover(ctx, cluster, observed),
-				"TargetInstance should have one pod. Pods (0)")
+				"targetInstance should have one pod. Pods (0)")
 		})
 
 		t.Run("not running", func(t *testing.T) {
@@ -734,7 +734,7 @@ func TestReconcilePatroniSwitchover(t *testing.T) {
 			observed := &observedInstances{forCluster: instances}
 
 			assert.Error(t, r.reconcilePatroniSwitchover(ctx, cluster, observed),
-				"Could not find a running pod when attempting switchover.")
+				"could not find a running pod when attempting switchover")
 		})
 	})
 
@@ -754,7 +754,7 @@ func TestReconcilePatroniSwitchover(t *testing.T) {
 			Name: "target",
 		}}}
 		assert.Error(t, r.reconcilePatroniSwitchover(ctx, cluster, observed),
-			"Need more than one instance to switchover")
+			"need more than one instance to switchover")
 	})
 
 	t.Run("timeline getting call errors", func(t *testing.T) {

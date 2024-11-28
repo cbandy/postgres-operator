@@ -6,9 +6,9 @@ package postgrescluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/pkg/errors"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,6 +23,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/naming"
 	"github.com/crunchydata/postgres-operator/internal/pgbackrest"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -38,7 +39,7 @@ func (r *Reconciler) observePersistentVolumeClaims(
 
 	selector, err := naming.AsSelector(naming.Cluster(cluster.Name))
 	if err == nil {
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, volumes,
 				client.InNamespace(cluster.Namespace),
 				client.MatchingLabelsSelector{Selector: selector},
@@ -267,7 +268,7 @@ func (r *Reconciler) configureExistingPGVolumes(
 			if err := r.setControllerReference(cluster, volume); err != nil {
 				return volumes, err
 			}
-			if err := errors.WithStack(r.apply(ctx, volume)); err != nil {
+			if err := tracing.Frame(r.apply(ctx, volume)); err != nil {
 				return volumes, err
 			}
 			volumes = append(volumes, volume)
@@ -320,7 +321,7 @@ func (r *Reconciler) configureExistingPGWALVolume(
 		if err := r.setControllerReference(cluster, volume); err != nil {
 			return volumes, err
 		}
-		if err := errors.WithStack(r.apply(ctx, volume)); err != nil {
+		if err := tracing.Frame(r.apply(ctx, volume)); err != nil {
 			return volumes, err
 		}
 		volumes = append(volumes, volume)
@@ -369,7 +370,7 @@ func (r *Reconciler) configureExistingRepoVolumes(
 			if err := r.setControllerReference(cluster, volume); err != nil {
 				return volumes, err
 			}
-			if err := errors.WithStack(r.apply(ctx, volume)); err != nil {
+			if err := tracing.Frame(r.apply(ctx, volume)); err != nil {
 				return volumes, err
 			}
 			volumes = append(volumes, volume)
@@ -394,7 +395,7 @@ func (r *Reconciler) reconcileDirMoveJobs(ctx context.Context,
 			Namespace:     cluster.Namespace,
 			LabelSelector: naming.DirectoryMoveJobLabels(cluster.Name).AsSelector(),
 		}); err != nil {
-			return false, errors.WithStack(err)
+			return false, tracing.Frame(err)
 		}
 
 		var err error
@@ -545,12 +546,12 @@ echo "PG Data directory preparation complete"`, cluster.Name,
 	// set gvk and ownership refs
 	moveDirJob.SetGroupVersionKind(batchv1.SchemeGroupVersion.WithKind("Job"))
 	if err := r.setControllerReference(cluster, moveDirJob); err != nil {
-		return true, errors.WithStack(err)
+		return true, tracing.Frame(err)
 	}
 
 	// server-side apply the backup Job intent
 	if err := r.apply(ctx, moveDirJob); err != nil {
-		return true, errors.WithStack(err)
+		return true, tracing.Frame(err)
 	}
 
 	return true, nil
@@ -662,12 +663,12 @@ echo "PG WAL directory preparation complete"`, cluster.Name,
 	// set gvk and ownership refs
 	moveDirJob.SetGroupVersionKind(batchv1.SchemeGroupVersion.WithKind("Job"))
 	if err := r.setControllerReference(cluster, moveDirJob); err != nil {
-		return true, errors.WithStack(err)
+		return true, tracing.Frame(err)
 	}
 
 	// server-side apply the backup Job intent
 	if err := r.apply(ctx, moveDirJob); err != nil {
-		return true, errors.WithStack(err)
+		return true, tracing.Frame(err)
 	}
 
 	return true, nil
@@ -782,12 +783,12 @@ echo "Repo directory preparation complete"`, cluster.Name,
 	// set gvk and ownership refs
 	moveDirJob.SetGroupVersionKind(batchv1.SchemeGroupVersion.WithKind("Job"))
 	if err := r.setControllerReference(cluster, moveDirJob); err != nil {
-		return true, errors.WithStack(err)
+		return true, tracing.Frame(err)
 	}
 
 	// server-side apply the backup Job intent
 	if err := r.apply(ctx, moveDirJob); err != nil {
-		return true, errors.WithStack(err)
+		return true, tracing.Frame(err)
 	}
 	return true, nil
 }

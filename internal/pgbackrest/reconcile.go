@@ -6,9 +6,9 @@ package pgbackrest
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
-	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
@@ -18,6 +18,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/naming"
 	"github.com/crunchydata/postgres-operator/internal/pki"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -58,9 +59,9 @@ func AddRepoVolumesToPod(postgresCluster *v1beta1.PostgresCluster, template *cor
 			}
 		}
 		if !initContainerFound {
-			return errors.Errorf(
-				"Unable to find init container %q when adding pgBackRest repo volumes",
-				naming.ContainerPGBackRestLogDirInit)
+			return tracing.Frame(fmt.Errorf(
+				"unable to find init container %q when adding pgBackRest repo volumes",
+				naming.ContainerPGBackRestLogDirInit))
 		}
 		template.Spec.InitContainers[index].VolumeMounts =
 			append(template.Spec.InitContainers[index].VolumeMounts, corev1.VolumeMount{
@@ -78,8 +79,8 @@ func AddRepoVolumesToPod(postgresCluster *v1beta1.PostgresCluster, template *cor
 				}
 			}
 			if !containerFound {
-				return errors.Errorf("Unable to find container %q when adding pgBackRest repo volumes",
-					name)
+				return tracing.Frame(fmt.Errorf(
+					"unable to find container %q when adding pgBackRest repo volumes", name))
 			}
 			template.Spec.Containers[index].VolumeMounts =
 				append(template.Spec.Containers[index].VolumeMounts, corev1.VolumeMount{
@@ -554,8 +555,7 @@ func Secret(ctx context.Context,
 		_ = leaf.Certificate.UnmarshalText(inSecret.Data[certClientSecretKey])
 		_ = leaf.PrivateKey.UnmarshalText(inSecret.Data[certClientPrivateKeySecretKey])
 
-		leaf, err = inRoot.RegenerateLeafWhenNecessary(leaf, commonName, dnsNames)
-		err = errors.WithStack(err)
+		leaf, err = tracing.Frame2(inRoot.RegenerateLeafWhenNecessary(leaf, commonName, dnsNames))
 	}
 
 	if err == nil {
@@ -583,8 +583,7 @@ func Secret(ctx context.Context,
 			_ = leaf.Certificate.UnmarshalText(inSecret.Data[certRepoSecretKey])
 			_ = leaf.PrivateKey.UnmarshalText(inSecret.Data[certRepoPrivateKeySecretKey])
 
-			leaf, err = inRoot.RegenerateLeafWhenNecessary(leaf, commonName, dnsNames)
-			err = errors.WithStack(err)
+			leaf, err = tracing.Frame2(inRoot.RegenerateLeafWhenNecessary(leaf, commonName, dnsNames))
 		}
 
 		if err == nil {

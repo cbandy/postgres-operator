@@ -7,12 +7,12 @@ package postgrescluster
 import (
 	"context"
 
-	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -58,7 +58,7 @@ func (r *Reconciler) handleDelete(
 		// Make another copy so that Patch doesn't write back to cluster.
 		intent := before.DeepCopy()
 		intent.Finalizers = append(intent.Finalizers, naming.Finalizer)
-		err := errors.WithStack(r.Writer.Patch(ctx, intent,
+		err := tracing.Frame(r.Writer.Patch(ctx, intent,
 			client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})))
 
 		// The caller can do what they like or requeue upon error.
@@ -96,7 +96,7 @@ func (r *Reconciler) handleDelete(
 	// Make another copy so that Patch doesn't write back to cluster.
 	intent := before.DeepCopy()
 	intent.Finalizers = finalizers.Delete(naming.Finalizer).List()
-	err := errors.WithStack(r.Writer.Patch(ctx, intent,
+	err := tracing.Frame(r.Writer.Patch(ctx, intent,
 		client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})))
 
 	// The caller should wait for further events or requeue upon error.

@@ -6,9 +6,9 @@ package crunchybridgecluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -16,6 +16,7 @@ import (
 
 	"github.com/crunchydata/postgres-operator/internal/bridge"
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -47,7 +48,7 @@ func (r *CrunchyBridgeClusterReconciler) generatePostgresRoleSecret(
 			naming.LabelCrunchyBridgeClusterPostgresRole: roleName,
 		})
 
-	err := errors.WithStack(r.setControllerReference(cluster, intent))
+	err := tracing.Frame(r.setControllerReference(cluster, intent))
 
 	return intent, err
 }
@@ -80,8 +81,9 @@ func (r *CrunchyBridgeClusterReconciler) reconcilePostgresRoleSecrets(
 	for i := range specRoles {
 		if secretNames[specRoles[i].SecretName] {
 			// Duplicate secretName found, return early with error
-			err := errors.New("Two or more of the Roles in the CrunchyBridgeCluster spec " +
-				"have the same SecretName. Role SecretNames must be unique.")
+			err := tracing.Frame(errors.New(
+				"Two or more of the Roles in the CrunchyBridgeCluster spec " +
+					"have the same SecretName. Role SecretNames must be unique."))
 			return nil, nil, err
 		}
 		secretNames[specRoles[i].SecretName] = true
@@ -92,7 +94,7 @@ func (r *CrunchyBridgeClusterReconciler) reconcilePostgresRoleSecrets(
 	// Make sure that this cluster's role secret names are not being used by any other
 	// secrets in the namespace
 	allSecretsInNamespace := &corev1.SecretList{}
-	err := errors.WithStack(r.Reader.List(ctx, allSecretsInNamespace, client.InNamespace(cluster.Namespace)))
+	err := tracing.Frame(r.Reader.List(ctx, allSecretsInNamespace, client.InNamespace(cluster.Namespace)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -101,10 +103,9 @@ func (r *CrunchyBridgeClusterReconciler) reconcilePostgresRoleSecrets(
 			existingSecretLabels := secret.GetLabels()
 			if existingSecretLabels[naming.LabelCluster] != cluster.Name ||
 				existingSecretLabels[naming.LabelRole] != naming.RoleCrunchyBridgeClusterPostgresRole {
-				err = errors.New(
-					fmt.Sprintf("There is already an existing Secret in this namespace with the name %v. "+
-						"Please choose a different name for this role's Secret.", secret.Name),
-				)
+				err = tracing.Frame(fmt.Errorf(
+					"There is already an existing Secret in this namespace with the name %v. "+
+						"Please choose a different name for this role's Secret.", secret.Name))
 				return nil, nil, err
 			}
 		}
@@ -114,7 +115,7 @@ func (r *CrunchyBridgeClusterReconciler) reconcilePostgresRoleSecrets(
 	secrets := &corev1.SecretList{}
 	selector, err := naming.AsSelector(naming.CrunchyBridgeClusterPostgresRoles(cluster.Name))
 	if err == nil {
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, secrets,
 				client.InNamespace(cluster.Namespace),
 				client.MatchingLabelsSelector{Selector: selector},
@@ -133,7 +134,7 @@ func (r *CrunchyBridgeClusterReconciler) reconcilePostgresRoleSecrets(
 			if specified && roleSpec.SecretName == secret.Name {
 				roleSecrets[secretRoleName] = secret
 			} else if err == nil {
-				err = errors.WithStack(r.deleteControlled(ctx, cluster, secret))
+				err = tracing.Frame(r.deleteControlled(ctx, cluster, secret))
 			}
 		}
 	}
@@ -152,7 +153,7 @@ func (r *CrunchyBridgeClusterReconciler) reconcilePostgresRoleSecrets(
 			roleSecrets[roleName], err = r.generatePostgresRoleSecret(cluster, role, clusterRole)
 		}
 		if err == nil {
-			err = errors.WithStack(r.apply(ctx, roleSecrets[roleName]))
+			err = tracing.Frame(r.apply(ctx, roleSecrets[roleName]))
 		}
 		if err != nil {
 			log.Error(err, "Issue creating role secret.")

@@ -6,6 +6,7 @@ package postgrescluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -299,14 +299,14 @@ func (r *Reconciler) observeInstances(
 
 	selector, err := naming.AsSelector(naming.ClusterInstances(cluster.Name))
 	if err == nil {
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, pods,
 				client.InNamespace(cluster.Namespace),
 				client.MatchingLabelsSelector{Selector: selector},
 			))
 	}
 	if err == nil {
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, runners,
 				client.InNamespace(cluster.Namespace),
 				client.MatchingLabelsSelector{Selector: selector},
@@ -417,7 +417,7 @@ func (r *Reconciler) deleteInstances(
 	pods := &corev1.PodList{}
 	instances, err := naming.AsSelector(naming.ClusterInstances(cluster.Name))
 	if err == nil {
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, pods,
 				client.InNamespace(cluster.Namespace),
 				client.MatchingLabelsSelector{Selector: instances},
@@ -444,19 +444,19 @@ func (r *Reconciler) deleteInstances(
 
 		switch owner := metav1.GetControllerOfNoCopy(pod); {
 		case owner == nil:
-			return errors.Errorf("pod %q has no owner", client.ObjectKeyFromObject(pod))
+			return tracing.Frame(fmt.Errorf("pod %q has no owner", client.ObjectKeyFromObject(pod)))
 
 		case owner.Kind == "StatefulSet":
 			instance.SetName(owner.Name)
 
 		default:
-			return errors.Errorf("unexpected kind %q", owner.Kind)
+			return tracing.Frame(fmt.Errorf("unexpected kind %q", owner.Kind))
 		}
 
 		// apps/v1.Deployment, apps/v1.ReplicaSet, and apps/v1.StatefulSet all
 		// have a "spec.replicas" field with the same meaning.
 		patch := client.RawPatch(client.Merge.Type(), []byte(`{"spec":{"replicas":0}}`))
-		err := errors.WithStack(r.Writer.Patch(ctx, instance, patch))
+		err := tracing.Frame(r.Writer.Patch(ctx, instance, patch))
 
 		// When the pod controller is missing, requeue rather than return an
 		// error. The garbage collector will stop the pod, and it is not our
@@ -531,7 +531,7 @@ func (r *Reconciler) deleteInstance(
 			uList := &unstructured.UnstructuredList{}
 			uList.SetGroupVersionKind(gvk)
 
-			err = errors.WithStack(
+			err = tracing.Frame(
 				r.Reader.List(ctx, uList,
 					client.InNamespace(cluster.GetNamespace()),
 					client.MatchingLabelsSelector{Selector: selector},
@@ -539,7 +539,7 @@ func (r *Reconciler) deleteInstance(
 
 			for i := range uList.Items {
 				if err == nil {
-					err = errors.WithStack(client.IgnoreNotFound(
+					err = tracing.Frame(client.IgnoreNotFound(
 						r.deleteControlled(ctx, cluster, &uList.Items[i])))
 				}
 			}
@@ -749,11 +749,11 @@ func (r *Reconciler) rolloutInstance(
 ) error {
 	// The StatefulSet and number of Pods should have already been verified, but
 	// check again rather than panic.
-	// TODO(cbandy): The check for StatefulSet can go away if we watch Pod deletes.
+	// TODO(watches): The check for StatefulSet can go away if we watch Pod deletes.
 	if instance.Runner == nil || len(instance.Pods) != 1 {
-		return errors.Errorf(
+		return tracing.Frame(fmt.Errorf(
 			"unexpected instance state during rollout: %v has %v pods",
-			instance.Name, len(instance.Pods))
+			instance.Name, len(instance.Pods)))
 	}
 
 	pod := instance.Pods[0]
@@ -779,9 +779,9 @@ func (r *Reconciler) rolloutInstance(
 		ctx, span := tracing.Start(ctx, "patroni-change-primary")
 		defer span.End()
 
-		success, err := patroni.Executor(exec).ChangePrimaryAndWait(ctx, pod.Name, "")
-		if err = errors.WithStack(err); err == nil && !success {
-			err = errors.New("unable to switchover")
+		success, err := tracing.Frame2(patroni.Executor(exec).ChangePrimaryAndWait(ctx, pod.Name, ""))
+		if err == nil && !success {
+			err = tracing.Frame(errors.New("unable to switchover"))
 		}
 
 		return tracing.Escape(span, err)
@@ -802,15 +802,14 @@ func (r *Reconciler) rolloutInstance(
 			defer span.End()
 
 			start := time.Now()
-			stdout, stderr, err := postgres.Executor(exec).
+			stdout, stderr, err := tracing.Frame3(postgres.Executor(exec).
 				ExecInDatabasesFromQuery(ctx, `SELECT pg_catalog.current_database()`,
 					`SET statement_timeout = :'timeout'; CHECKPOINT;`,
 					map[string]string{
 						"timeout":       fmt.Sprintf("%ds", graceSeconds),
 						"ON_ERROR_STOP": "on", // Abort when any one statement fails.
 						"QUIET":         "on", // Do not print successful statements to stdout.
-					})
-			err = errors.WithStack(err)
+					}))
 			elapsed := time.Since(start)
 
 			logging.FromContext(ctx).V(1).Info("attempted checkpoint",
@@ -846,7 +845,7 @@ func (r *Reconciler) rolloutInstance(
 	//
 	// NOTE(cbandy): This could return an apierrors.IsConflict() which should be
 	// retried by another reconcile (not ignored).
-	return errors.WithStack(
+	return tracing.Frame(
 		r.Writer.Delete(ctx, pod, client.Preconditions{
 			UID:             &pod.UID,
 			ResourceVersion: &pod.ResourceVersion,
@@ -1128,7 +1127,7 @@ func (r *Reconciler) reconcileInstance(
 	*instance = appsv1.StatefulSet{}
 	instance.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
 	instance.Namespace, instance.Name = existing.Namespace, existing.Name
-	err := errors.WithStack(r.setControllerReference(cluster, instance))
+	err := tracing.Frame(r.setControllerReference(cluster, instance))
 	if err == nil {
 		generateInstanceStatefulSetIntent(ctx, cluster, spec,
 			clusterPodService.Name, instanceServiceAccount.Name, instance,
@@ -1187,7 +1186,7 @@ func (r *Reconciler) reconcileInstance(
 			monitoringUserSecret := &corev1.Secret{ObjectMeta: naming.MonitoringUserSecret(cluster)}
 			// Create new err variable to avoid abandoning the rest of the reconcile loop if there
 			// is an error getting the monitoring user secret
-			err := errors.WithStack(
+			err := tracing.Frame(
 				r.Reader.Get(ctx, client.ObjectKeyFromObject(monitoringUserSecret), monitoringUserSecret))
 			if err == nil {
 				pgPassword = string(monitoringUserSecret.Data["password"])
@@ -1244,7 +1243,7 @@ func (r *Reconciler) reconcileInstance(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, instance))
+		err = tracing.Frame(r.apply(ctx, instance))
 	}
 	if err == nil {
 		log.V(1).Info("reconciled instance", "instance", instance.Name)
@@ -1405,7 +1404,7 @@ func (r *Reconciler) reconcileInstanceConfigMap(
 	instanceConfigMap.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
 
 	// TODO(cbandy): Instance StatefulSet as owner?
-	err := errors.WithStack(r.setControllerReference(cluster, instanceConfigMap))
+	err := tracing.Frame(r.setControllerReference(cluster, instanceConfigMap))
 
 	instanceConfigMap.Annotations = naming.Merge(
 		cluster.Spec.Metadata.GetAnnotationsOrNil(),
@@ -1441,7 +1440,7 @@ func (r *Reconciler) reconcileInstanceConfigMap(
 		err = patroni.InstanceConfigMap(ctx, cluster, spec, instanceConfigMap)
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, instanceConfigMap))
+		err = tracing.Frame(r.apply(ctx, instanceConfigMap))
 	}
 
 	return instanceConfigMap, err
@@ -1458,7 +1457,7 @@ func (r *Reconciler) reconcileInstanceCertificates(
 	root *pki.RootCertificateAuthority, backupsSpecFound bool,
 ) (*corev1.Secret, error) {
 	existing := &corev1.Secret{ObjectMeta: naming.InstanceCertificates(instance)}
-	err := errors.WithStack(client.IgnoreNotFound(
+	err := tracing.Frame(client.IgnoreNotFound(
 		r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing)))
 
 	instanceCerts := &corev1.Secret{ObjectMeta: naming.InstanceCertificates(instance)}
@@ -1466,7 +1465,7 @@ func (r *Reconciler) reconcileInstanceCertificates(
 
 	// TODO(cbandy): Instance StatefulSet as owner?
 	if err == nil {
-		err = errors.WithStack(r.setControllerReference(cluster, instanceCerts))
+		err = tracing.Frame(r.setControllerReference(cluster, instanceCerts))
 	}
 
 	instanceCerts.Annotations = naming.Merge(
@@ -1504,7 +1503,7 @@ func (r *Reconciler) reconcileInstanceCertificates(
 			instanceCerts)
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, instanceCerts))
+		err = tracing.Frame(r.apply(ctx, instanceCerts))
 	}
 
 	return instanceCerts, err
@@ -1523,7 +1522,7 @@ func (r *Reconciler) reconcileInstanceSetPodDisruptionBudget(
 ) error {
 	if spec.Replicas == nil {
 		// Replicas should always have a value because of defaults in the spec
-		return errors.New("Replicas should be defined")
+		return tracing.Frame(errors.New("replicas should be defined"))
 	}
 	minAvailable := getMinAvailable(spec.MinAvailable, *spec.Replicas)
 
@@ -1547,15 +1546,15 @@ func (r *Reconciler) reconcileInstanceSetPodDisruptionBudget(
 		scaled, err = intstr.GetScaledValueFromIntOrPercent(minAvailable, int(*spec.Replicas), true)
 	}
 	if err == nil && scaled <= 0 {
-		err := errors.WithStack(r.Reader.Get(ctx, client.ObjectKeyFromObject(pdb), pdb))
+		err := tracing.Frame(r.Reader.Get(ctx, client.ObjectKeyFromObject(pdb), pdb))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, pdb))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, pdb))
 		}
 		return client.IgnoreNotFound(err)
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, pdb))
+		err = tracing.Frame(r.apply(ctx, pdb))
 	}
 	return err
 }

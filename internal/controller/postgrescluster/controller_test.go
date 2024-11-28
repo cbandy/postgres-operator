@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"braces.dev/errtrace"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
-	"github.com/pkg/errors" //nolint:depguard // This legacy test covers so much code, it logs the origin of unexpected errors.
 	"gotest.tools/v3/assert"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -168,11 +168,7 @@ var _ = Describe("PostgresCluster Reconciler", func() {
 
 		result, err := test.Reconciler.Reconcile(ctx, cluster)
 		Expect(err).ToNot(HaveOccurred(), func() string {
-			var t interface{ StackTrace() errors.StackTrace }
-			if errors.As(err, &t) {
-				return fmt.Sprintf("[partial] error trace:%+v\n", t.StackTrace()[:1])
-			}
-			return ""
+			return fmt.Sprintf("error trace:%s", errtrace.FormatString(err))
 		})
 
 		return result

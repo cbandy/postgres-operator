@@ -6,12 +6,12 @@ package postgrescluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
-	"github.com/pkg/errors"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,6 +25,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/naming"
 	"github.com/crunchydata/postgres-operator/internal/pgbackrest"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -63,7 +64,8 @@ func (r *Reconciler) reconcileVolumeSnapshots(ctx context.Context,
 		ctx, volumesnapshotv1.SchemeGroupVersion.WithKind("VolumeSnapshot"),
 	) {
 		if postgrescluster.Spec.Backups.Snapshots != nil {
-			return errors.New("VolumeSnapshots are not installed/enabled in this Kubernetes cluster; cannot create snapshot.")
+			return tracing.Frame(errors.New(
+				"cannot create snapshot: VolumeSnapshots are not installed/enabled in Kubernetes"))
 		} else {
 			return nil
 		}
@@ -75,7 +77,7 @@ func (r *Reconciler) reconcileVolumeSnapshots(ctx context.Context,
 	if postgrescluster.Spec.Backups.Snapshots != nil &&
 		clusterUsingTablespaces(ctx, postgrescluster) {
 		r.Recorder.Event(postgrescluster, corev1.EventTypeWarning, "IncompatibleFeatures",
-			"VolumeSnapshots not currently compatible with TablespaceVolumes; cannot create snapshot.")
+			"cannot create snapshot: VolumeSnapshots not currently compatible with TablespaceVolumes")
 		return nil
 	}
 
@@ -148,7 +150,7 @@ func (r *Reconciler) reconcileVolumeSnapshots(ctx context.Context,
 		var snapshot *volumesnapshotv1.VolumeSnapshot
 		snapshot, err = r.generateSnapshotOfDedicatedSnapshotVolume(postgrescluster, pvc)
 		if err == nil {
-			err = errors.WithStack(r.apply(ctx, snapshot))
+			err = tracing.Frame(r.apply(ctx, snapshot))
 		}
 	}
 
@@ -196,9 +198,9 @@ func (r *Reconciler) reconcileDedicatedSnapshotVolume(
 	// Check the client cache first using Get.
 	if cluster.Spec.Backups.Snapshots == nil {
 		key := client.ObjectKeyFromObject(pvc)
-		err := errors.WithStack(r.Reader.Get(ctx, key, pvc))
+		err := tracing.Frame(r.Reader.Get(ctx, key, pvc))
 		if err == nil {
-			err = errors.WithStack(r.deleteControlled(ctx, cluster, pvc))
+			err = tracing.Frame(r.deleteControlled(ctx, cluster, pvc))
 		}
 		return nil, client.IgnoreNotFound(err)
 	}
@@ -263,14 +265,14 @@ func (r *Reconciler) reconcileDedicatedSnapshotVolume(
 
 		patch := client.RawPatch(client.Merge.Type(), []byte(annotations))
 		err = r.handlePersistentVolumeClaimError(cluster,
-			errors.WithStack(r.Writer.Patch(ctx, pvc, patch)))
+			tracing.Frame(r.Writer.Patch(ctx, pvc, patch)))
 
 		if err != nil {
 			return pvc, err
 		}
 
 		err = r.Writer.Delete(ctx, restoreJob, client.PropagationPolicy(metav1.DeletePropagationBackground))
-		return pvc, errors.WithStack(err)
+		return pvc, tracing.Frame(err)
 	}
 
 	// If the restore job failed, create a warning event.
@@ -307,7 +309,7 @@ func (r *Reconciler) createDedicatedSnapshotVolume(ctx context.Context,
 		labelMap,
 	)
 
-	err = errors.WithStack(r.setControllerReference(cluster, pvc))
+	err = tracing.Frame(r.setControllerReference(cluster, pvc))
 	if err != nil {
 		return pvc, err
 	}
@@ -322,10 +324,7 @@ func (r *Reconciler) createDedicatedSnapshotVolume(ctx context.Context,
 	pvc.Spec.Resources.Limits = nil
 
 	err = r.handlePersistentVolumeClaimError(cluster,
-		errors.WithStack(r.apply(ctx, pvc)))
-	if err != nil {
-		return pvc, err
-	}
+		tracing.Frame(r.apply(ctx, pvc)))
 
 	return pvc, err
 }
@@ -377,7 +376,7 @@ func (r *Reconciler) dedicatedSnapshotVolumeRestore(ctx context.Context,
 
 	if err := r.generateRestoreJobIntent(cluster, configHash, instanceName, cmd,
 		volumeMounts, volumes, fakeDataSource, restoreJob); err != nil {
-		return errors.WithStack(err)
+		return tracing.Frame(err)
 	}
 
 	// Attempt the restore exactly once. If the restore job fails, we prompt the user to investigate.
@@ -396,7 +395,7 @@ func (r *Reconciler) dedicatedSnapshotVolumeRestore(ctx context.Context,
 	AddTMPEmptyDir(&restoreJob.Spec.Template)
 
 	restoreJob.Annotations[naming.PGBackRestBackupJobCompletion] = backupJob.Status.CompletionTime.Format(time.RFC3339)
-	return errors.WithStack(r.apply(ctx, restoreJob))
+	return tracing.Frame(r.apply(ctx, restoreJob))
 }
 
 // generateSnapshotOfDedicatedSnapshotVolume will generate a VolumeSnapshot of
@@ -442,7 +441,7 @@ func (r *Reconciler) generateVolumeSnapshot(postgrescluster *v1beta1.PostgresClu
 			naming.LabelCluster: postgrescluster.Name,
 		})
 
-	err := errors.WithStack(r.setControllerReference(postgrescluster, snapshot))
+	err := tracing.Frame(r.setControllerReference(postgrescluster, snapshot))
 
 	return snapshot, err
 }
@@ -458,7 +457,7 @@ func (r *Reconciler) getDedicatedSnapshotVolumeRestoreJob(ctx context.Context,
 	jobs := &batchv1.JobList{}
 	selectJobs, err := naming.AsSelector(naming.ClusterRestoreJobs(postgrescluster.Name))
 	if err == nil {
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, jobs,
 				client.InNamespace(postgrescluster.Namespace),
 				client.MatchingLabelsSelector{Selector: selectJobs},
@@ -488,7 +487,7 @@ func (r *Reconciler) getLatestCompleteBackupJob(ctx context.Context,
 	jobs := &batchv1.JobList{}
 	selectJobs, err := naming.AsSelector(naming.ClusterBackupJobs(postgrescluster.Name))
 	if err == nil {
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, jobs,
 				client.InNamespace(postgrescluster.Namespace),
 				client.MatchingLabelsSelector{Selector: selectJobs},
@@ -554,7 +553,7 @@ func (r *Reconciler) getSnapshotsForCluster(ctx context.Context, cluster *v1beta
 		return nil, err
 	}
 	snapshots := &volumesnapshotv1.VolumeSnapshotList{}
-	err = errors.WithStack(
+	err = tracing.Frame(
 		r.Reader.List(ctx, snapshots,
 			client.InNamespace(cluster.Namespace),
 			client.MatchingLabelsSelector{Selector: selectSnapshots},
@@ -591,7 +590,7 @@ func (r *Reconciler) deleteSnapshots(ctx context.Context,
 	postgrescluster *v1beta1.PostgresCluster, snapshots []*volumesnapshotv1.VolumeSnapshot) error {
 
 	for i := range snapshots {
-		err := errors.WithStack(client.IgnoreNotFound(
+		err := tracing.Frame(client.IgnoreNotFound(
 			r.deleteControlled(ctx, postgrescluster, snapshots[i])))
 		if err != nil {
 			return err

@@ -10,8 +10,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/pkg/errors"
-
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -102,7 +101,7 @@ fi
 		}
 
 		// if none of the above errors, return the err
-		return false, errors.WithStack(fmt.Errorf("%w: %v", err, errReturn))
+		return false, tracing.Frame(fmt.Errorf("%w: %v", err, errReturn))
 	}
 
 	return false, nil

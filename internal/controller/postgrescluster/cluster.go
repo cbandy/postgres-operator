@@ -6,10 +6,10 @@ package postgrescluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,6 +21,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/patroni"
 	"github.com/crunchydata/postgres-operator/internal/pki"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -35,7 +36,7 @@ func (r *Reconciler) reconcileClusterConfigMap(
 	clusterConfigMap := &corev1.ConfigMap{ObjectMeta: naming.ClusterConfigMap(cluster)}
 	clusterConfigMap.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
 
-	err := errors.WithStack(r.setControllerReference(cluster, clusterConfigMap))
+	err := tracing.Frame(r.setControllerReference(cluster, clusterConfigMap))
 
 	clusterConfigMap.Annotations = naming.Merge(cluster.Spec.Metadata.GetAnnotationsOrNil())
 	clusterConfigMap.Labels = naming.Merge(cluster.Spec.Metadata.GetLabelsOrNil(),
@@ -48,7 +49,7 @@ func (r *Reconciler) reconcileClusterConfigMap(
 			clusterConfigMap, r.patroniLogSize(ctx, cluster))
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, clusterConfigMap))
+		err = tracing.Frame(r.apply(ctx, clusterConfigMap))
 	}
 
 	return clusterConfigMap, err
@@ -91,7 +92,7 @@ func (r *Reconciler) reconcileClusterPodService(
 	clusterPodService := &corev1.Service{ObjectMeta: naming.ClusterPodService(cluster)}
 	clusterPodService.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
 
-	err := errors.WithStack(r.setControllerReference(cluster, clusterPodService))
+	err := tracing.Frame(r.setControllerReference(cluster, clusterPodService))
 
 	clusterPodService.Annotations = naming.Merge(cluster.Spec.Metadata.GetAnnotationsOrNil())
 	clusterPodService.Labels = naming.Merge(cluster.Spec.Metadata.GetLabelsOrNil(),
@@ -111,7 +112,7 @@ func (r *Reconciler) reconcileClusterPodService(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, clusterPodService))
+		err = tracing.Frame(r.apply(ctx, clusterPodService))
 	}
 
 	return clusterPodService, err
@@ -142,7 +143,7 @@ func (r *Reconciler) generateClusterPrimaryService(
 			naming.LabelRole:    naming.RolePrimary,
 		})
 
-	err := errors.WithStack(r.setControllerReference(cluster, service))
+	err := tracing.Frame(r.setControllerReference(cluster, service))
 
 	// Endpoints for a Service have the same name as the Service. Copy labels,
 	// annotations, and ownership, too.
@@ -151,8 +152,9 @@ func (r *Reconciler) generateClusterPrimaryService(
 	endpoints.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Endpoints"))
 
 	if leader == nil {
-		// TODO(cbandy): We need to build a different kind of Service here.
-		return nil, nil, errors.New("Patroni DCS other than Kubernetes Endpoints is not implemented")
+		// TODO(patroni): We need to build a different kind of Service here.
+		return nil, nil, tracing.Frame(errors.New(
+			"not implemented: Patroni DCS other than Kubernetes Endpoints"))
 	}
 
 	// Allocate no IP address (headless) and manage the Endpoints ourselves.
@@ -202,10 +204,10 @@ func (r *Reconciler) reconcileClusterPrimaryService(
 	service, endpoints, err := r.generateClusterPrimaryService(cluster, leader)
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		err = tracing.Frame(r.apply(ctx, service))
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, endpoints))
+		err = tracing.Frame(r.apply(ctx, endpoints))
 	}
 	return service, err
 }
@@ -288,7 +290,7 @@ func (r *Reconciler) generateClusterReplicaService(
 		naming.LabelRole:    naming.RolePatroniReplica,
 	}
 
-	err := errors.WithStack(r.setControllerReference(cluster, service))
+	err := tracing.Frame(r.setControllerReference(cluster, service))
 
 	return service, err
 }
@@ -303,7 +305,7 @@ func (r *Reconciler) reconcileClusterReplicaService(
 	service, err := r.generateClusterReplicaService(cluster)
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		err = tracing.Frame(r.apply(ctx, service))
 	}
 	return service, err
 }
@@ -335,9 +337,9 @@ func (r *Reconciler) reconcileDataSource(ctx context.Context,
 
 	// observe all resources currently relevant to reconciling data sources, and update status
 	// accordingly
-	endpoints, restoreJob, err := r.observeRestoreEnv(ctx, cluster)
+	endpoints, restoreJob, err := tracing.Frame3(r.observeRestoreEnv(ctx, cluster))
 	if err != nil {
-		return false, errors.WithStack(err)
+		return false, err
 	}
 
 	// determine if the user wants to initialize the PG data directory
@@ -409,9 +411,9 @@ func (r *Reconciler) reconcileDataSource(ctx context.Context,
 		configs = []string{cloudDataSource.Stanza, cloudDataSource.Repo.Name}
 		configs = append(configs, cloudDataSource.Options...)
 	}
-	configHash, err := hashFunc(configs)
+	configHash, err := tracing.Frame2(hashFunc(configs))
 	if err != nil {
-		return false, errors.WithStack(err)
+		return false, err
 	}
 	var configChanged bool
 	if restoreJob != nil {

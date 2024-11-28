@@ -7,7 +7,6 @@ package pgupgrade
 import (
 	"context"
 
-	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -15,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -38,7 +38,7 @@ func (r *PGUpgradeReconciler) observeWorld(
 	world.Upgrade = upgrade
 
 	cluster := v1beta1.NewPostgresCluster()
-	err := errors.WithStack(
+	err := tracing.Frame(
 		r.Reader.Get(ctx, client.ObjectKey{
 			Namespace: upgrade.Namespace,
 			Name:      upgrade.Spec.PostgresClusterName,
@@ -47,7 +47,7 @@ func (r *PGUpgradeReconciler) observeWorld(
 
 	if err == nil {
 		var endpoints corev1.EndpointsList
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, &endpoints,
 				client.InNamespace(upgrade.Namespace),
 				client.MatchingLabelsSelector{Selector: selectCluster},
@@ -57,7 +57,7 @@ func (r *PGUpgradeReconciler) observeWorld(
 
 	if err == nil {
 		var jobs batchv1.JobList
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, &jobs,
 				client.InNamespace(upgrade.Namespace),
 				client.MatchingLabelsSelector{Selector: selectCluster},
@@ -69,7 +69,7 @@ func (r *PGUpgradeReconciler) observeWorld(
 
 	if err == nil {
 		var statefulsets appsv1.StatefulSetList
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, &statefulsets,
 				client.InNamespace(upgrade.Namespace),
 				client.MatchingLabelsSelector{Selector: selectCluster},

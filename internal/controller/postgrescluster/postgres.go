@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,6 +37,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/postgis"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
 	pgpassword "github.com/crunchydata/postgres-operator/internal/postgres/password"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/internal/util"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
@@ -225,9 +225,9 @@ func (r *Reconciler) generatePostgresUserSecret(
 			}
 		}
 
-		password, err := generate(util.DefaultGeneratedPasswordLength)
+		password, err := tracing.Frame2(generate(util.DefaultGeneratedPasswordLength))
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, err
 		}
 		intent.Data["password"] = []byte(password)
 		intent.Data["verifier"] = nil
@@ -238,9 +238,9 @@ func (r *Reconciler) generatePostgresUserSecret(
 	// NOTE(cbandy): We don't have a function to compare a plaintext
 	// password to a SCRAM verifier.
 	if len(intent.Data["verifier"]) == 0 {
-		verifier, err := pgpassword.NewSCRAMPassword(string(intent.Data["password"])).Build()
+		verifier, err := tracing.Frame2(pgpassword.NewSCRAMPassword(string(intent.Data["password"])).Build())
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, err
 		}
 		intent.Data["verifier"] = []byte(verifier)
 	}
@@ -317,7 +317,7 @@ func (r *Reconciler) generatePostgresUserSecret(
 			naming.LabelPostgresUser: username,
 		})
 
-	err := errors.WithStack(r.setControllerReference(cluster, intent))
+	err := tracing.Frame(r.setControllerReference(cluster, intent))
 
 	return intent, err
 }
@@ -421,7 +421,7 @@ func (r *Reconciler) reconcilePostgresDatabases(
 
 	if err == nil {
 		log := logging.FromContext(ctx).WithValues("revision", revision)
-		err = errors.WithStack(create(logging.NewContext(ctx, log), podExecutor))
+		err = tracing.Frame(create(logging.NewContext(ctx, log), podExecutor))
 	}
 	if err == nil && pgAuditOK && postgisInstallOK {
 		cluster.Status.DatabaseRevision = revision
@@ -541,7 +541,7 @@ func (r *Reconciler) reconcilePostgresUserSecrets(
 	secrets := &corev1.SecretList{}
 	selector, err := naming.AsSelector(naming.ClusterPostgresUsers(cluster.Name))
 	if err == nil {
-		err = errors.WithStack(
+		err = tracing.Frame(
 			r.Reader.List(ctx, secrets,
 				client.InNamespace(cluster.Namespace),
 				client.MatchingLabelsSelector{Selector: selector},
@@ -600,7 +600,7 @@ func (r *Reconciler) reconcilePostgresUserSecrets(
 					userSecrets[secretUserName] = secret
 				}
 			} else if err == nil {
-				err = errors.WithStack(r.deleteControlled(ctx, cluster, secret))
+				err = tracing.Frame(r.deleteControlled(ctx, cluster, secret))
 			}
 		}
 	}
@@ -619,7 +619,7 @@ func (r *Reconciler) reconcilePostgresUserSecrets(
 			userSecrets[userName], err = r.generatePostgresUserSecret(cluster, user, secret)
 		}
 		if err == nil {
-			err = errors.WithStack(r.apply(ctx, userSecrets[userName]))
+			err = tracing.Frame(r.apply(ctx, userSecrets[userName]))
 		}
 	}
 
@@ -699,7 +699,7 @@ func (r *Reconciler) reconcilePostgresUsersInPostgreSQL(
 
 	if err == nil {
 		log := logging.FromContext(ctx).WithValues("revision", revision)
-		err = errors.WithStack(write(logging.NewContext(ctx, log), podExecutor))
+		err = tracing.Frame(write(logging.NewContext(ctx, log), podExecutor))
 	}
 	if err == nil {
 		cluster.Status.UsersRevision = revision
@@ -739,7 +739,7 @@ func (r *Reconciler) reconcilePostgresDataVolume(
 
 	pvc.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("PersistentVolumeClaim"))
 
-	err := errors.WithStack(r.setControllerReference(cluster, pvc))
+	err := tracing.Frame(r.setControllerReference(cluster, pvc))
 
 	pvc.Annotations = naming.Merge(
 		cluster.Spec.Metadata.GetAnnotationsOrNil(),
@@ -787,7 +787,7 @@ func (r *Reconciler) reconcilePostgresDataVolume(
 
 	if err == nil {
 		err = r.handlePersistentVolumeClaimError(cluster,
-			errors.WithStack(r.apply(ctx, pvc)))
+			tracing.Frame(r.apply(ctx, pvc)))
 	}
 
 	return pvc, err
@@ -833,7 +833,7 @@ func (r *Reconciler) reconcileTablespaceVolumes(
 
 		pvc.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("PersistentVolumeClaim"))
 
-		err = errors.WithStack(r.setControllerReference(cluster, pvc))
+		err = tracing.Frame(r.setControllerReference(cluster, pvc))
 
 		pvc.Annotations = naming.Merge(
 			cluster.Spec.Metadata.GetAnnotationsOrNil(),
@@ -849,7 +849,7 @@ func (r *Reconciler) reconcileTablespaceVolumes(
 
 		if err == nil {
 			err = r.handlePersistentVolumeClaimError(cluster,
-				errors.WithStack(r.apply(ctx, pvc)))
+				tracing.Frame(r.apply(ctx, pvc)))
 		}
 
 		if err != nil {
@@ -898,7 +898,7 @@ func (r *Reconciler) reconcilePostgresWALVolume(
 		// No WAL volume is specified; delete the PVC safely if it exists. Check
 		// the client cache first using Get.
 		key := client.ObjectKeyFromObject(pvc)
-		err := errors.WithStack(r.Reader.Get(ctx, key, pvc))
+		err := tracing.Frame(r.Reader.Get(ctx, key, pvc))
 		if err != nil {
 			return nil, client.IgnoreNotFound(err)
 		}
@@ -923,7 +923,7 @@ func (r *Reconciler) reconcilePostgresWALVolume(
 
 				// This assumes that $PGDATA matches the configured PostgreSQL "data_directory".
 				var stdout bytes.Buffer
-				err = errors.WithStack(r.PodExec(
+				err = tracing.Frame(r.PodExec(
 					ctx, observed.Pods[0].Namespace, observed.Pods[0].Name, naming.ContainerDatabase,
 					nil, &stdout, nil, "bash", "-ceu", "--", `exec realpath "${PGDATA}/pg_wal"`))
 
@@ -931,7 +931,7 @@ func (r *Reconciler) reconcilePostgresWALVolume(
 			}
 		}
 		if err == nil && walDirectory == postgres.WALDirectory(cluster, instanceSpec) {
-			return nil, errors.WithStack(
+			return nil, tracing.Frame(
 				client.IgnoreNotFound(r.deleteControlled(ctx, cluster, pvc)))
 		}
 
@@ -940,7 +940,7 @@ func (r *Reconciler) reconcilePostgresWALVolume(
 		return pvc, err
 	}
 
-	err := errors.WithStack(r.setControllerReference(cluster, pvc))
+	err := tracing.Frame(r.setControllerReference(cluster, pvc))
 
 	pvc.Annotations = naming.Merge(
 		cluster.Spec.Metadata.GetAnnotationsOrNil(),
@@ -962,7 +962,7 @@ func (r *Reconciler) reconcilePostgresWALVolume(
 
 	if err == nil {
 		err = r.handlePersistentVolumeClaimError(cluster,
-			errors.WithStack(r.apply(ctx, pvc)))
+			tracing.Frame(r.apply(ctx, pvc)))
 	}
 
 	return pvc, err
@@ -1010,7 +1010,7 @@ func (r *Reconciler) reconcileDatabaseInitSQL(ctx context.Context,
 
 		key := cluster.Spec.DatabaseInitSQL.Key
 		if _, ok := cm.Data[key]; !ok {
-			err := errors.Errorf("ConfigMap did not contain expected key: %s", key)
+			err := tracing.Frame(fmt.Errorf("ConfigMap did not contain expected key: %s", key))
 			return "", err
 		}
 
@@ -1054,7 +1054,7 @@ func (r *Reconciler) reconcileDatabaseInitSQL(ctx context.Context,
 	)
 
 	// Write SQL to database using the podExecutor
-	err = errors.WithStack(write(logging.NewContext(ctx, log), podExecutor))
+	err = tracing.Frame(write(logging.NewContext(ctx, log), podExecutor))
 
 	// If the podExec returns with exit code 0 the write is considered a
 	// success, keep track of the ConfigMap using a status. This helps to

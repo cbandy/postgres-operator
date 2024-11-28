@@ -10,12 +10,12 @@ package postgrescluster
 // policy/v1 an empty selector matches every pod in the namespace.
 // https://kubernetes.io/docs/tasks/run-application/configure-pdb/#specifying-a-poddisruptionbudget
 import (
-	"github.com/pkg/errors"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/crunchydata/postgres-operator/internal/initialize"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -35,7 +35,7 @@ func (r *Reconciler) generatePodDisruptionBudget(
 		},
 	}
 	pdb.SetGroupVersionKind(policyv1.SchemeGroupVersion.WithKind("PodDisruptionBudget"))
-	err := errors.WithStack(r.setControllerReference(cluster, pdb))
+	err := tracing.Frame(r.setControllerReference(cluster, pdb))
 	return pdb, err
 }
 

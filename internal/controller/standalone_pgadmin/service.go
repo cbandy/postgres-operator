@@ -6,8 +6,8 @@ package standalone_pgadmin
 
 import (
 	"context"
+	"errors"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +17,7 @@ import (
 
 	"github.com/crunchydata/postgres-operator/internal/logging"
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -80,7 +81,7 @@ func (r *PGAdminReconciler) reconcilePGAdminService(
 
 				// If the service is not controlled by this pgAdmin then we shouldn't reconcile
 				if !metav1.IsControlledBy(existingService, pgadmin) {
-					err := errors.New("Service is controlled by another object")
+					err := tracing.Frame(errors.New("service is controlled by another object"))
 					log.V(1).Error(err, "PGO does not force ownership on existing services",
 						"ServiceName", pgadmin.Spec.ServiceName)
 					r.Recorder.Event(pgadmin,
@@ -96,11 +97,11 @@ func (r *PGAdminReconciler) reconcilePGAdminService(
 		service := service(pgadmin)
 
 		// Set the controller reference on the service
-		if err := errors.WithStack(r.setControllerReference(pgadmin, service)); err != nil {
+		if err := tracing.Frame(r.setControllerReference(pgadmin, service)); err != nil {
 			return err
 		}
 
-		return errors.WithStack(r.apply(ctx, service))
+		return tracing.Frame(r.apply(ctx, service))
 	}
 
 	// If we get here then ServiceName was not provided through the spec

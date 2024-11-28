@@ -120,7 +120,7 @@ func TestAddRepoVolumesToPod(t *testing.T) {
 			}
 			err := AddRepoVolumesToPod(postgresCluster, template, tc.testMap, getContainerNames(tc.containers)...)
 			if len(tc.initContainers) == 0 {
-				assert.Error(t, err, "Unable to find init container \"pgbackrest-log-dir\" when adding pgBackRest repo volumes")
+				assert.Error(t, err, "unable to find init container \"pgbackrest-log-dir\" when adding pgBackRest repo volumes")
 			} else {
 				assert.NilError(t, err)
 

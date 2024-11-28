@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -680,7 +679,7 @@ func (r *CrunchyBridgeClusterReconciler) GetSecretKeys(
 		Name:      crunchyBridgeCluster.Spec.Secret,
 	}}
 
-	err := errors.WithStack(
+	err := tracing.Frame(
 		r.Reader.Get(ctx, client.ObjectKeyFromObject(existing), existing))
 
 	if err == nil {

@@ -5,15 +5,16 @@
 package pgbackrest
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/rand"
 
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -81,10 +82,10 @@ func CalculateConfigHashes(
 			hash, err = hashFunc([]string{repo.S3.Bucket, repo.S3.Endpoint, repo.S3.Region})
 			name = repo.Name
 		default:
-			return map[string]string{}, "", errors.New("found unexpected repo type")
+			return map[string]string{}, "", tracing.Frame(errors.New("found unexpected repo type"))
 		}
 		if err != nil {
-			return map[string]string{}, "", errors.WithStack(err)
+			return map[string]string{}, "", tracing.Frame(err)
 		}
 		repoConfigHashes[name] = hash
 	}
@@ -99,7 +100,7 @@ func CalculateConfigHashes(
 	}
 	configHash, err := hashFunc(configHashes)
 	if err != nil {
-		return map[string]string{}, "", errors.WithStack(err)
+		return map[string]string{}, "", tracing.Frame(err)
 	}
 
 	return repoConfigHashes, configHash, nil

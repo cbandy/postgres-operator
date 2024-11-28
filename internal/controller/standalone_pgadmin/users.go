@@ -8,18 +8,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/logging"
 	"github.com/crunchydata/postgres-operator/internal/naming"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
 
@@ -53,7 +54,7 @@ func (r *PGAdminReconciler) reconcilePGAdminUsers(ctx context.Context, pgadmin *
 	pod := &corev1.Pod{ObjectMeta: naming.StandalonePGAdmin(pgadmin)}
 	pod.Name += "-0"
 
-	err := errors.WithStack(r.Reader.Get(ctx, client.ObjectKeyFromObject(pod), pod))
+	err := tracing.Frame(r.Reader.Get(ctx, client.ObjectKeyFromObject(pod), pod))
 	if err != nil {
 		return client.IgnoreNotFound(err)
 	}
@@ -135,7 +136,7 @@ func (r *PGAdminReconciler) writePGAdminUsers(ctx context.Context, pgadmin *v1be
 	log := logging.FromContext(ctx)
 
 	existingUserSecret := &corev1.Secret{ObjectMeta: naming.StandalonePGAdmin(pgadmin)}
-	err := errors.WithStack(
+	err := tracing.Frame(
 		r.Reader.Get(ctx, client.ObjectKeyFromObject(existingUserSecret), existingUserSecret))
 	if client.IgnoreNotFound(err) != nil {
 		return err
@@ -185,7 +186,7 @@ cd $PGADMIN_DIR
 			Namespace: pgadmin.Namespace,
 			Name:      user.PasswordRef.Name,
 		}}
-		err := errors.WithStack(
+		err := tracing.Frame(
 			r.Reader.Get(ctx, client.ObjectKeyFromObject(userPasswordSecret), userPasswordSecret))
 		if err != nil {
 			log.Error(err, "Could not get user password secret")
@@ -230,8 +231,8 @@ cd $PGADMIN_DIR
 					intentUsers = append(intentUsers, existingUser)
 					continue
 				} else if strings.TrimSpace(stderr.String()) != "" {
-					log.Error(errors.New(stderr.String()), fmt.Sprintf("pgAdmin setup.py error for %s: ",
-						intentUser.Username))
+					log.Error(tracing.Frame(errors.New(stderr.String())),
+						"pgAdmin setup.py error", "user", intentUser.Username)
 					intentUsers = append(intentUsers, existingUser)
 					continue
 				}
@@ -242,10 +243,10 @@ cd $PGADMIN_DIR
 					strings.Contains(stdout.String(), "Password must be") {
 
 					log.Info("Failed to update pgAdmin user", "user", intentUser.Username, "error", stdout.String())
-					r.Recorder.Event(pgadmin,
+					r.Recorder.Eventf(pgadmin,
 						corev1.EventTypeWarning, "InvalidUserWarning",
-						fmt.Sprintf("Failed to update pgAdmin user %s: %s",
-							intentUser.Username, stdout.String()))
+						"Failed to update pgAdmin user %s: %s",
+						intentUser.Username, stdout.String())
 					intentUsers = append(intentUsers, existingUser)
 					continue
 				}
@@ -264,8 +265,8 @@ cd $PGADMIN_DIR
 				continue
 			}
 			if strings.TrimSpace(stderr.String()) != "" {
-				log.Error(errors.New(stderr.String()), fmt.Sprintf("pgAdmin setup.py error for %s: ",
-					intentUser.Username))
+				log.Error(tracing.Frame(errors.New(stderr.String())),
+					"pgAdmin setup.py error", "user", intentUser.Username)
 				continue
 			}
 			// If add user fails due to invalid username or password length:
@@ -295,9 +296,9 @@ cd $PGADMIN_DIR
 	// intentUsers to json and write the users.json file to the secret.
 	intentUserSecret.Data["users.json"], _ = json.Marshal(intentUsers)
 
-	err = errors.WithStack(r.setControllerReference(pgadmin, intentUserSecret))
+	err = tracing.Frame(r.setControllerReference(pgadmin, intentUserSecret))
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intentUserSecret))
+		err = tracing.Frame(r.apply(ctx, intentUserSecret))
 	}
 
 	return err

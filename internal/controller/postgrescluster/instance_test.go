@@ -1837,7 +1837,7 @@ func TestReconcileInstanceSetPodDisruptionBudget(t *testing.T) {
 		spec := &v1beta1.PostgresInstanceSetSpec{}
 
 		assert.Error(t, r.reconcileInstanceSetPodDisruptionBudget(ctx, cluster, spec),
-			"Replicas should be defined")
+			"replicas should be defined")
 	})
 
 	t.Run("not created", func(t *testing.T) {

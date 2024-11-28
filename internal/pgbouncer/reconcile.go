@@ -8,7 +8,6 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/postgres"
 	passwd "github.com/crunchydata/postgres-operator/internal/postgres/password"
 	"github.com/crunchydata/postgres-operator/internal/shell"
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 	"github.com/crunchydata/postgres-operator/internal/util"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 )
@@ -72,16 +72,13 @@ func Secret(ctx context.Context,
 
 	if len(password) == 0 {
 		// If the password is empty, generate new password and verifier.
-		password, err = util.GenerateASCIIPassword(32)
-		err = errors.WithStack(err)
+		password, err = tracing.Frame2(util.GenerateASCIIPassword(32))
 		if err == nil {
-			verifier, err = passwd.NewSCRAMPassword(password).Build()
-			err = errors.WithStack(err)
+			verifier, err = tracing.Frame2(passwd.NewSCRAMPassword(password).Build())
 		}
 	} else if len(password) != 0 && len(verifier) == 0 {
 		// If the password is non-empty and the verifier is empty, generate a new verifier.
-		verifier, err = passwd.NewSCRAMPassword(password).Build()
-		err = errors.WithStack(err)
+		verifier, err = tracing.Frame2(passwd.NewSCRAMPassword(password).Build())
 	}
 
 	if err == nil {
@@ -104,8 +101,7 @@ func Secret(ctx context.Context,
 			_ = leaf.Certificate.UnmarshalText(inSecret.Data[certFrontendSecretKey])
 			_ = leaf.PrivateKey.UnmarshalText(inSecret.Data[certFrontendPrivateKeySecretKey])
 
-			leaf, err = inRoot.RegenerateLeafWhenNecessary(leaf, dnsFQDN, dnsNames)
-			err = errors.WithStack(err)
+			leaf, err = tracing.Frame2(inRoot.RegenerateLeafWhenNecessary(leaf, dnsFQDN, dnsNames))
 		}
 
 		if err == nil {
