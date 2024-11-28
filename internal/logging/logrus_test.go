@@ -14,6 +14,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors" //nolint:depguard // This is testing the logging of stack frames.
 	"gotest.tools/v3/assert"
+
+	"github.com/crunchydata/postgres-operator/internal/tracing"
 )
 
 func assertLogrusContains(t testing.TB, actual, expected string) {
@@ -54,12 +56,28 @@ func TestLogrus(t *testing.T) {
 	logrus.Error(fmt.Errorf("%s", "dang"), "")
 	assertLogrusContains(t, out.String(), `level=error error=dang`)
 
-	// A wrapped error includes one frame of its stack.
+	// A nil error is ERROR level.
 	out.Reset()
-	_, _, baseline, _ := runtime.Caller(0)
-	logrus.Error(errors.New("dang"), "")
-	assertLogrusContains(t, out.String(), fmt.Sprintf(`file="internal/logging/logrus_test.go:%d"`, baseline+1))
-	assertLogrusContains(t, out.String(), `func=logging.TestLogrus`)
+	logrus.Error(nil, "")
+	assertLogrusContains(t, out.String(), `level=error error="<nil>"`)
+
+	// A [github.com/pkg/errors] error includes one frame of its stack.
+	{
+		out.Reset()
+		_, _, baseline, _ := runtime.Caller(0)
+		logrus.Error(errors.New("dang"), "")
+		assertLogrusContains(t, out.String(), fmt.Sprintf(`file="internal/logging/logrus_test.go:%d"`, baseline+1))
+		assertLogrusContains(t, out.String(), `func=logging.TestLogrus`)
+	}
+
+	// A [tracing.Frame] error includes its frame.
+	{
+		out.Reset()
+		_, _, baseline, _ := runtime.Caller(0)
+		logrus.Error(tracing.Frame(fmt.Errorf("%s", "dang")), "")
+		assertLogrusContains(t, out.String(), fmt.Sprintf(`file="internal/logging/logrus_test.go:%d"`, baseline+1))
+		assertLogrusContains(t, out.String(), `func=logging.TestLogrus`)
+	}
 
 	out.Reset()
 	logrus.Info(0, "", "k1", "str", "k2", 13, "k3", false)

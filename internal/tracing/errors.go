@@ -106,3 +106,34 @@ func addError(s Span, err error, attrs ...attribute.KeyValue) {
 		semconv.ExceptionMessage(err.Error()),
 	)...))
 }
+
+// Frame adds information about the caller to err. This information will appear
+// in logs and in spans passed to [Check] or [Escape].
+//
+//go:noinline
+func Frame(err error) error {
+	if err != nil {
+		err = errtrace.GetCaller().Wrap(err)
+	}
+	return err
+}
+
+// Frame2 is the same as [Frame] for a function that returns two results.
+//
+//go:noinline
+func Frame2[T any](v T, err error) (T, error) {
+	if err != nil {
+		err = errtrace.GetCaller().Wrap(err)
+	}
+	return v, err
+}
+
+// Frame3 is the same as [Frame] for a function that returns three results.
+//
+//go:noinline
+func Frame3[T1, T2 any](v1 T1, v2 T2, err error) (T1, T2, error) {
+	if err != nil {
+		err = errtrace.GetCaller().Wrap(err)
+	}
+	return v1, v2, err
+}

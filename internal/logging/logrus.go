@@ -7,6 +7,7 @@ package logging
 import (
 	"fmt"
 	"io"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -33,7 +34,8 @@ func Logrus(out io.Writer, version string, debug, verbosity int) logr.LogSink {
 	})
 
 	_, module, _, _ := runtime.Caller(0)
-	module = strings.TrimSuffix(module, "internal/logging/logrus.go")
+	module = strings.TrimSuffix(module,
+		filepath.Join("internal", "logging", "logrus.go"))
 
 	return &sink{
 		verbosity: verbosity,
@@ -47,12 +49,17 @@ func Logrus(out io.Writer, version string, debug, verbosity int) logr.LogSink {
 			}
 			entry = entry.WithError(err)
 
-			var t interface{ StackTrace() errors.StackTrace }
-			if errors.As(err, &t) {
-				if st := t.StackTrace(); len(st) > 0 {
+			type errtraceProgramCounter interface{ TracePC() uintptr }
+			type pkgerrorsStackTrace interface{ StackTrace() errors.StackTrace }
+
+			if pe, ok := err.(pkgerrorsStackTrace); ok || errors.As(err, &pe) {
+				if st := pe.StackTrace(); len(st) > 0 {
 					frame, _ := runtime.CallersFrames([]uintptr{uintptr(st[0])}).Next()
 					logrusFrame(entry, frame, module)
 				}
+			} else if et, ok := err.(errtraceProgramCounter); ok || errors.As(err, &et) {
+				frame, _ := runtime.CallersFrames([]uintptr{et.TracePC()}).Next()
+				logrusFrame(entry, frame, module)
 			}
 			entry.Log(logrus.ErrorLevel, message)
 		},
@@ -105,7 +112,7 @@ func logrusFrame(entry *logrus.Entry, frame runtime.Frame, module string) {
 		entry.Data["file"] = fileline
 	}
 	if frame.Function != "" {
-		_, function := filepath.Split(frame.Function)
+		_, function := path.Split(frame.Function)
 		if v, ok := entry.Data["func"]; ok {
 			entry.Data["fields.func"] = v
 		}

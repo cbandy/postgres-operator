@@ -16,6 +16,56 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+func TestFrame(t *testing.T) {
+	assert.NilError(t, Frame(nil))
+
+	_, _, baseline, _ := runtime.Caller(0)
+	err := Frame(errors.New("bang"))
+
+	frame := getFrame(err)
+	assert.Equal(t, frame.File, "internal/tracing/errors_test.go")
+	assert.Equal(t, frame.Line, baseline+1)
+	assert.Equal(t, frame.Function, "tracing.TestFrame")
+}
+
+func TestFrame2(t *testing.T) {
+	v, err := Frame2('x', nil)
+	assert.Equal(t, v, 'x')
+	assert.NilError(t, err)
+
+	{
+		_, _, baseline, _ := runtime.Caller(0)
+		v, err := Frame2(22, errors.New("bang"))
+
+		assert.Equal(t, v, 22)
+
+		frame := getFrame(err)
+		assert.Equal(t, frame.File, "internal/tracing/errors_test.go")
+		assert.Equal(t, frame.Line, baseline+1)
+		assert.Equal(t, frame.Function, "tracing.TestFrame2")
+	}
+}
+
+func TestFrame3(t *testing.T) {
+	a, b, err := Frame3([]byte(`gg`), true, nil)
+	assert.DeepEqual(t, a, []byte(`gg`))
+	assert.Equal(t, b, true)
+	assert.NilError(t, err)
+
+	{
+		_, _, baseline, _ := runtime.Caller(0)
+		a, b, err := Frame3(false, "asdf", errors.New("bang"))
+
+		assert.Equal(t, a, false)
+		assert.Equal(t, b, "asdf")
+
+		frame := getFrame(err)
+		assert.Equal(t, frame.File, "internal/tracing/errors_test.go")
+		assert.Equal(t, frame.Line, baseline+1)
+		assert.Equal(t, frame.Function, "tracing.TestFrame3")
+	}
+}
+
 func TestCheck(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	tracer := trace.NewTracerProvider(
