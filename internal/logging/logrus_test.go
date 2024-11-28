@@ -6,13 +6,13 @@ package logging
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors" //nolint:depguard // This is testing the logging of stack frames.
 	"gotest.tools/v3/assert"
 
 	"github.com/crunchydata/postgres-operator/internal/tracing"
@@ -61,20 +61,11 @@ func TestLogrus(t *testing.T) {
 	logrus.Error(nil, "")
 	assertLogrusContains(t, out.String(), `level=error error="<nil>"`)
 
-	// A [github.com/pkg/errors] error includes one frame of its stack.
-	{
-		out.Reset()
-		_, _, baseline, _ := runtime.Caller(0)
-		logrus.Error(errors.New("dang"), "")
-		assertLogrusContains(t, out.String(), fmt.Sprintf(`file="internal/logging/logrus_test.go:%d"`, baseline+1))
-		assertLogrusContains(t, out.String(), `func=logging.TestLogrus`)
-	}
-
 	// A [tracing.Frame] error includes its frame.
 	{
 		out.Reset()
 		_, _, baseline, _ := runtime.Caller(0)
-		logrus.Error(tracing.Frame(fmt.Errorf("%s", "dang")), "")
+		logrus.Error(tracing.Frame(errors.New("dang")), "")
 		assertLogrusContains(t, out.String(), fmt.Sprintf(`file="internal/logging/logrus_test.go:%d"`, baseline+1))
 		assertLogrusContains(t, out.String(), `func=logging.TestLogrus`)
 	}
@@ -89,7 +80,7 @@ func TestLogrus(t *testing.T) {
 
 	// Fields don't overwrite builtins.
 	out.Reset()
-	logrus.Error(errors.New("dang"), "banana",
+	logrus.Error(tracing.Frame(errors.New("dang")), "banana",
 		"error", "not-err",
 		"file", "not-file",
 		"func", "not-func",

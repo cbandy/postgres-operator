@@ -5,6 +5,7 @@
 package logging
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -13,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -50,14 +50,8 @@ func Logrus(out io.Writer, version string, debug, verbosity int) logr.LogSink {
 			entry = entry.WithError(err)
 
 			type errtraceProgramCounter interface{ TracePC() uintptr }
-			type pkgerrorsStackTrace interface{ StackTrace() errors.StackTrace }
 
-			if pe, ok := err.(pkgerrorsStackTrace); ok || errors.As(err, &pe) {
-				if st := pe.StackTrace(); len(st) > 0 {
-					frame, _ := runtime.CallersFrames([]uintptr{uintptr(st[0])}).Next()
-					logrusFrame(entry, frame, module)
-				}
-			} else if et, ok := err.(errtraceProgramCounter); ok || errors.As(err, &et) {
+			if et, ok := err.(errtraceProgramCounter); ok || errors.As(err, &et) {
 				frame, _ := runtime.CallersFrames([]uintptr{et.TracePC()}).Next()
 				logrusFrame(entry, frame, module)
 			}
