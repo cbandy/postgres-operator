@@ -5,30 +5,104 @@
 package tracing
 
 import (
+	"errors"
+	"path"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"braces.dev/errtrace"
+	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// An error implementing `TracePC() uintptr` contains stack trace information.
+// See: [errtrace.UnwrapFrame]
+type errtraceProgramCounter interface{ TracePC() uintptr }
+
+var moduleDirectory string
+
+func init() {
+	// Calculate the directory of main module reported by [runtime].
+	_, moduleDirectory, _, _ = runtime.Caller(0)
+	moduleDirectory = strings.TrimSuffix(moduleDirectory,
+		filepath.Join("internal", "tracing", "errors.go"))
+}
+
+// getFrame returns a [runtime.Frame] corresponding to program information, if any, attached to err.
+func getFrame(err error) runtime.Frame {
+	var frame runtime.Frame
+
+	if et, ok := err.(errtraceProgramCounter); ok || errors.As(err, &et) {
+		frame, _ = runtime.CallersFrames([]uintptr{et.TracePC()}).Next()
+	}
+
+	// Remove the path to the directory of the main module; it is just noise.
+	frame.File = strings.TrimPrefix(frame.File, moduleDirectory)
+
+	// Remove the path leading up to the package and function name.
+	_, frame.Function = path.Split(frame.Function)
+
+	return frame
+}
 
 // Check returns true when err is nil. Otherwise, it adds err as an exception
 // event on s and returns false. If you intend to return err, consider using
 // [Escape] instead.
 //
 // See: https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-spans
+//
+//go:noinline
 func Check(s Span, err error) bool {
 	if err == nil {
 		return true
 	}
 	if s.IsRecording() {
-		s.RecordError(err)
+		if _, ok := err.(errtraceProgramCounter); !ok {
+			err = errtrace.GetCaller().Wrap(err)
+		}
+		addError(s, err)
 	}
 	return false
 }
 
 // Escape adds non-nil err as an escaped exception event on s and returns err.
+//
 // See: https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-spans
+//
+//go:noinline
 func Escape(s Span, err error) error {
 	if err != nil && s.IsRecording() {
-		s.RecordError(err, trace.WithAttributes(semconv.ExceptionEscaped(true)))
+		if _, ok := err.(errtraceProgramCounter); !ok {
+			err = errtrace.GetCaller().Wrap(err)
+		}
+		addError(s, err, semconv.ExceptionEscaped(true))
 	}
 	return err
+}
+
+// addError adds err to s as an exception event with attrs.
+//
+// When the error includes a file, line, or function name, those are added to the event as code
+// attributes. This is similar to [Span.RecordError] but does not bother with the error type,
+// which is often [fmt.wrapError] or [errors.errorString].
+func addError(s Span, err error, attrs ...attribute.KeyValue) {
+	frame := getFrame(err)
+
+	if frame.File != "" {
+		attrs = append(attrs,
+			semconv.CodeFilepath(frame.File),
+			semconv.CodeLineNumber(frame.Line),
+		)
+	}
+	if frame.Function != "" {
+		attrs = append(attrs,
+			semconv.CodeFunction(frame.Function),
+		)
+	}
+
+	s.AddEvent(semconv.ExceptionEventName, trace.WithAttributes(append(attrs,
+		semconv.ExceptionMessage(err.Error()),
+	)...))
 }

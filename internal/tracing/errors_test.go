@@ -7,6 +7,7 @@ package tracing
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 
 	"go.opentelemetry.io/otel/sdk/trace"
@@ -33,6 +34,7 @@ func TestCheck(t *testing.T) {
 
 	{
 		_, span := tracer.Start(context.Background(), "")
+		_, _, baseline, _ := runtime.Caller(0)
 		assert.Assert(t, !Check(span, errors.New("msg")))
 		span.End()
 
@@ -44,11 +46,15 @@ func TestCheck(t *testing.T) {
 		assert.Equal(t, event.Name, semconv.ExceptionEventName)
 
 		attrs := event.Attributes
-		assert.Equal(t, len(attrs), 2)
-		assert.Equal(t, string(attrs[0].Key), "exception.type")
-		assert.Equal(t, string(attrs[1].Key), "exception.message")
-		assert.Equal(t, attrs[0].Value.AsInterface(), "*errors.errorString")
-		assert.Equal(t, attrs[1].Value.AsInterface(), "msg")
+		assert.Equal(t, len(attrs), 4)
+		assert.Equal(t, string(attrs[0].Key), "code.filepath")
+		assert.Equal(t, string(attrs[1].Key), "code.lineno")
+		assert.Equal(t, string(attrs[2].Key), "code.function")
+		assert.Equal(t, string(attrs[3].Key), "exception.message")
+		assert.Equal(t, attrs[0].Value.AsInterface(), "internal/tracing/errors_test.go")
+		assert.Equal(t, attrs[1].Value.AsInterface(), int64(baseline+1))
+		assert.Equal(t, attrs[2].Value.AsInterface(), "tracing.TestCheck")
+		assert.Equal(t, attrs[3].Value.AsInterface(), "msg")
 	}
 }
 
@@ -71,6 +77,7 @@ func TestEscape(t *testing.T) {
 	{
 		_, span := tracer.Start(context.Background(), "")
 		expected := errors.New("somesuch")
+		_, _, baseline, _ := runtime.Caller(0)
 		assert.Assert(t, errors.Is(Escape(span, expected), expected),
 			"expected to unwrap the original error")
 		span.End()
@@ -83,12 +90,16 @@ func TestEscape(t *testing.T) {
 		assert.Equal(t, event.Name, semconv.ExceptionEventName)
 
 		attrs := event.Attributes
-		assert.Equal(t, len(attrs), 3)
+		assert.Equal(t, len(attrs), 5)
 		assert.Equal(t, string(attrs[0].Key), "exception.escaped")
-		assert.Equal(t, string(attrs[1].Key), "exception.type")
-		assert.Equal(t, string(attrs[2].Key), "exception.message")
+		assert.Equal(t, string(attrs[1].Key), "code.filepath")
+		assert.Equal(t, string(attrs[2].Key), "code.lineno")
+		assert.Equal(t, string(attrs[3].Key), "code.function")
+		assert.Equal(t, string(attrs[4].Key), "exception.message")
 		assert.Equal(t, attrs[0].Value.AsInterface(), true)
-		assert.Equal(t, attrs[1].Value.AsInterface(), "*errors.errorString")
-		assert.Equal(t, attrs[2].Value.AsInterface(), "somesuch")
+		assert.Equal(t, attrs[1].Value.AsInterface(), "internal/tracing/errors_test.go")
+		assert.Equal(t, attrs[2].Value.AsInterface(), int64(baseline+1))
+		assert.Equal(t, attrs[3].Value.AsInterface(), "tracing.TestEscape")
+		assert.Equal(t, attrs[4].Value.AsInterface(), "somesuch")
 	}
 }

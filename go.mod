@@ -4,6 +4,7 @@ module github.com/crunchydata/postgres-operator
 go 1.24.0
 
 require (
+	braces.dev/errtrace v0.4.0
 	github.com/go-logr/logr v1.4.3
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/go-cmp v0.7.0
