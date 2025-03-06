@@ -67,7 +67,7 @@ func (*HostBasedAuthentication) quote(value string) string {
 
 func (hba *HostBasedAuthentication) quoteDatabase(name string) string {
 	// Since PostgreSQL 16, a quoted string beginning with slash U+002F is
-	// interpreted as a regular expression. Express these names a Postgres
+	// interpreted as a regular expression. Express these names as a Postgres
 	// regex that exactly matches the entire name.
 	if len(name) > 0 && name[0] == '/' {
 		name = "/^" +
