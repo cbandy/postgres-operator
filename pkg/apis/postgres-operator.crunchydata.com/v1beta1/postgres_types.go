@@ -129,13 +129,6 @@ type PostgresHBARule struct {
 //
 // +structType=atomic
 type PostgresHBARuleSpec struct {
-	//// 🌱 Files containing HBA records that are included in the "pg_hba.conf" file.
-	//// ---
-	//// +kubebuilder:validation:MaxItems=20
-	//// +listType=atomic
-	//// +optional
-	//Files []OptionalFileRef `json:"files,omitempty"`
-
 	// One line of the "pg_hba.conf" file. Changes to this value will be automatically reloaded without validation.
 	// ---
 	// +kubebuilder:validation:MinLength=1
