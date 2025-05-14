@@ -15,6 +15,9 @@ BUILDAH_BUILD ?= buildah bud
 GO ?= go
 GO_BUILD = $(GO) build
 GO_TEST ?= $(GO) test
+
+CHAINSAW ?= $(GO) run github.com/kyverno/chainsaw@latest
+CHAINSAW_TEST ?= $(CHAINSAW) test
 KUTTL ?= kubectl-kuttl
 KUTTL_TEST ?= $(KUTTL) test
 
@@ -217,8 +220,9 @@ check-envtest-existing: createnamespaces
 		$(GO_TEST) -count=1 -cover -p=1 ./...
 	kubectl delete -k ./config/dev
 
+.PHONY: check-chainsaw
 check-chainsaw:
-	chainsaw test --config testing/chainsaw/e2e/config.yaml --values testing/chainsaw/e2e/values.yaml testing/chainsaw/e2e
+	$(CHAINSAW_TEST) --config testing/chainsaw/e2e/config.yaml --values testing/chainsaw/e2e/values.yaml testing/chainsaw/e2e
 
 # Expects operator to be running
 .PHONY: check-kuttl
