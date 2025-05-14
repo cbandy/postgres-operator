@@ -8,6 +8,7 @@ spec:
       description: >
         Create a tablespace and grant access to all Postgres users
       script:
+        skipCommandOutput: true
         content: |
           PRIMARY=$(
             kubectl get pod --namespace "${NAMESPACE}" \

@@ -26,6 +26,7 @@ spec:
       description: >
         Store the timestamp reported by PostgreSQL
       script:
+        skipCommandOutput: true
         env:
           - name: PRIMARY
             value: ($primary)
@@ -43,6 +44,7 @@ spec:
       description: >
         A reason to restore
       command:
+        skipCommandOutput: true
         env:
           - name: PRIMARY
             value: ($primary)
@@ -56,6 +58,7 @@ spec:
           - -qb
           - original
           - --set=ON_ERROR_STOP=1
+          - --pset=footer=off
           - --command
           - DROP TABLE original.important
           - --command
@@ -67,6 +70,7 @@ spec:
       description: >
         Wait for the change to be sent to the WAL archive
       script:
+        skipCommandOutput: true
         env:
           - name: PRIMARY
             value: ($primary)
@@ -98,10 +102,8 @@ spec:
       description: >
         Confirm that the replica also needs to be restored
       command:
+        skipCommandOutput: true
         env:
-          # https://github.com/kyverno/chainsaw/issues/2130
-          - name: DOLLAR
-            value: $
           - name: REPLICA
             value: ($replica)
         entrypoint: kubectl
@@ -116,8 +118,8 @@ spec:
           - --set=ON_ERROR_STOP=1
           - --command
           - |
-            DO ${DOLLAR}${DOLLAR}
+            DO $$$$
             BEGIN
               PERFORM * FROM information_schema.tables WHERE table_name = 'important';
               ASSERT NOT FOUND, 'expected no table';
-            END ${DOLLAR}${DOLLAR}
+            END $$$$

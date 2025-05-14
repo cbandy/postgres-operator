@@ -88,10 +88,8 @@ spec:
       description: >
         Confirm that the replica is streaming from the primary
       command:
+        skipCommandOutput: true
         env:
-        # https://github.com/kyverno/chainsaw/issues/2130
-        - name: DOLLAR
-          value: $
         - name: REPLICA
           value: ($replica)
         entrypoint: kubectl
@@ -106,12 +104,12 @@ spec:
           - --set=ON_ERROR_STOP=1
           - --command
           - |
-            DO ${DOLLAR}${DOLLAR}
+            DO $$$$
             BEGIN
               -- only users with "pg_read_all_stats" role may examine "pg_stat_wal_receiver"
               PERFORM * FROM pg_stat_wal_receiver WHERE status = 'streaming';
               ASSERT FOUND, 'expected streaming replication';
-            END ${DOLLAR}${DOLLAR}
+            END $$$$
 
   catch:
     -
