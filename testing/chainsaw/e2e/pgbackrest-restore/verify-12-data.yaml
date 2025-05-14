@@ -4,15 +4,20 @@ metadata:
   name: verify-12-data
 spec:
   bindings:
-    # https://github.com/kyverno/chainsaw/issues/2133
-    #- name: target
-    #  value: 'The name of the PostgresCluster'
-    - name: job
-      value: (join('-', [$target, 'data']))
-    - name: secret
-      value: (join('-', [$target, 'pguser', $target]))
+    - name: target
+      value: 'The name of the PostgresCluster'
 
   try:
+    # Create bindings derived from the template input.
+    - command:
+        entrypoint: 'true'
+        skipCommandOutput: true
+        outputs:
+          - name: job
+            value: (join('-', [$target, 'data']))
+          - name: secret
+            value: (join('-', [$target, 'pguser', $target]))
+
     -
       description: >
         Confirm that all the data was restored

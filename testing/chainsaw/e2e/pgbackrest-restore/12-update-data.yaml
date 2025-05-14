@@ -47,6 +47,7 @@ spec:
       description: >
         Wait for the data to be sent to the WAL archive
       script:
+        skipCommandOutput: true
         content: |
           PRIMARY=$(
             kubectl get pod --namespace "${NAMESPACE}" \
@@ -56,7 +57,7 @@ spec:
           )
 
           kubectl exec --namespace "${NAMESPACE}" "${PRIMARY}" \
-            -- psql --command 'SELECT pg_switch_wal()'
+            -- psql --command 'SELECT pg_switch_wal()' --pset footer=off
 
           # A prior step reset the "pg_stat_archiver" counters, so anything more than zero should suffice.
           while [ 0 = "$(

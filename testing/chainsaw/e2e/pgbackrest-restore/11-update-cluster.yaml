@@ -61,6 +61,7 @@ spec:
       description: >
         Wait for Postgres to restart
       script:
+        skipCommandOutput: true
         timeout: 30s
         env:
           - name: BEFORE
@@ -79,4 +80,4 @@ spec:
 
           # Reset counters in the "pg_stat_archiver" view.
           kubectl exec --namespace "${NAMESPACE}" "${PRIMARY}" \
-            -- psql -qb --command "SELECT pg_stat_reset_shared('archiver')"
+            -- psql -qb --command "SELECT pg_stat_reset_shared('archiver')" --output /dev/null

@@ -3,10 +3,9 @@ kind: StepTemplate
 metadata:
   name: clone-cluster
 spec:
-  # https://github.com/kyverno/chainsaw/issues/2133
-  #bindings:
-  #  - name: target
-  #    value: 'The name of the new PostgresCluster'
+  bindings:
+    - name: target
+      value: 'The name of the new PostgresCluster'
 
   try:
     -
