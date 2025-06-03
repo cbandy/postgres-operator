@@ -8,8 +8,10 @@
 ---
 version: 2
 updates:
+  # Update all workflows and local composite actions.
   - package-ecosystem: github-actions
     directories:
+      # "/" is a special case that includes ".github/workflows/*"
       - '/'
       - '.github/actions/*'
     schedule:
@@ -18,3 +20,18 @@ updates:
     groups:
       all-github-actions:
         patterns: ['*']
+
+  # Go "x" modules and Go and Google gRPC modules:
+  # https://pkg.go.dev/golang.org/x
+  # https://cloud.google.com/go/google.golang.org
+  - package-ecosystem: gomod
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: wednesday
+    groups:
+      golang-org-modules:
+        patterns:
+          - 'golang.org/x/*'
+          - 'github.com/golang/*'
+          - 'google.golang.org/*'
