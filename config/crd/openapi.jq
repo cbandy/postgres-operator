@@ -22,4 +22,25 @@
 
 # TODO: "io.k8s.apiextensions-apiserver.pkg.apis.apiextensions.v1.JSONSchemaProps"
 
-.
+
+# Prune the modified schema to contain only the desired definitions.
+{
+  schema: ., have: {}, want: [
+    "io.k8s.apiextensions-apiserver.pkg.apis.apiextensions.v1.CustomResourceDefinition",
+    empty
+  ],
+} |
+
+# Lookup every definition and the definitions to which it refers.
+until(.want | length == 0; (.want | first) as $this | {
+  schema,
+  have: (.have + { ($this): .schema.definitions[$this] }),
+  want: (.want + [
+      .schema.definitions[$this] | .. | .["$ref"]? // empty | strings |
+      match("^#/definitions/([^/]+)$").captures[0].string
+    ] - (.have | keys) - [$this]
+  ),
+}) |
+
+# Replace the definitions with the desired set, and return the modified schema.
+(.schema.definitions = .have) | .schema
