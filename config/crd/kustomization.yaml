@@ -6,7 +6,13 @@ resources:
 - bases/postgres-operator.crunchydata.com_pgupgrades.yaml
 - bases/postgres-operator.crunchydata.com_pgadmins.yaml
 
+# Use a modified schema TODO: explain
+# https://kubectl.docs.kubernetes.io/references/kustomize/kustomization/openapi
+openapi:
+  path: openapi.json
+
 patches:
+- path: validation.yaml
 - target:
     kind: CustomResourceDefinition
   patch: |-

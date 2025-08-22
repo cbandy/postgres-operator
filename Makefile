@@ -10,6 +10,7 @@ GO_TEST ?= $(GO) test
 # Ensure modules imported by `postgres-operator` and `controller-gen` are compatible
 # by managing them together in the main module.
 CONTROLLER ?= $(GO) tool sigs.k8s.io/controller-tools/cmd/controller-gen
+JQ ?= $(GO) run github.com/itchyny/gojq/cmd/gojq@latest
 
 # Run tests using the latest tools.
 CHAINSAW ?= $(GO) run github.com/kyverno/chainsaw@latest
@@ -44,17 +45,18 @@ notes: ## List known issues and future considerations
 .PHONY: clean
 clean: ## Clean resources
 clean: clean-deprecated
-	rm -f bin/postgres-operator
-	rm -rf licenses/*/
+	rm -f config/crd/openapi.json
 	[ ! -d testing/kuttl/e2e-generated ] || rm -r testing/kuttl/e2e-generated
 	[ ! -d hack/tools/envtest ] || { chmod -R u+w hack/tools/envtest && rm -r hack/tools/envtest; }
 	[ ! -d hack/tools/pgmonitor ] || rm -rf hack/tools/pgmonitor
-	[ ! -d hack/tools/external-snapshotter ] || rm -rf hack/tools/external-snapshotter
 	[ ! -n "$$(ls hack/tools)" ] || rm -r hack/tools/*
 	[ ! -d hack/.kube ] || rm -r hack/.kube
 
 .PHONY: clean-deprecated
 clean-deprecated: ## Clean deprecated resources
+	rm -f bin/postgres-operator
+	rm -rf licenses/*/
+	[ ! -d hack/tools/external-snapshotter ] || rm -rf hack/tools/external-snapshotter
 	@# packages used to be downloaded into the vendor directory
 	[ ! -d vendor ] || rm -r vendor
 	@# executables used to be compiled into the $GOBIN directory
@@ -229,6 +231,11 @@ generate: generate-collector
 generate: generate-crd
 generate: generate-deepcopy
 generate: generate-rbac
+
+config/crd/openapi.json:
+	$(GO) mod download k8s.io/kubernetes@latest
+	$(JQ) > '$@' --from-file config/crd/openapi.jq \
+		'$(shell $(GO) list -f '{{.Dir}}' -m --mod=readonly k8s.io/kubernetes@latest)/api/openapi-spec/swagger.json'
 
 .PHONY: generate-crd
 generate-crd: ## Generate Custom Resource Definitions (CRDs)
