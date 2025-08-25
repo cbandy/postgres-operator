@@ -43,6 +43,7 @@ func upgradeCommand(spec *v1beta1.PGUpgradeSettings, fetchKeyCommand string) []s
 		"Clone":         ` --clone`,
 		"Copy":          ` --copy`,
 		"CopyFileRange": ` --copy-file-range`,
+		"Swap":          ` --swap`,
 	}[spec.TransferMethod], ` --link`)
 
 	oldVersion := spec.FromPostgresVersion

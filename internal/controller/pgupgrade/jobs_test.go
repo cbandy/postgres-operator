@@ -107,6 +107,7 @@ func TestUpgradeCommand(t *testing.T) {
 			{Spec: "Clone", Args: "--clone"},
 			{Spec: "Copy", Args: "--copy"},
 			{Spec: "CopyFileRange", Args: "--copy-file-range"},
+			{Spec: "Swap", Args: "--swap"},
 		} {
 			spec := &v1beta1.PGUpgradeSettings{TransferMethod: tt.Spec}
 			command := upgradeCommand(spec, "")
@@ -118,7 +119,6 @@ func TestUpgradeCommand(t *testing.T) {
 
 			expectScript(t, script)
 		}
-
 	})
 }
 

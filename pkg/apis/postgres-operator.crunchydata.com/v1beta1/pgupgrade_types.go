@@ -79,6 +79,7 @@ type PGUpgradeSpec struct {
 // +kubebuilder:validation:XValidation:rule=`self.fromPostgresVersion < self.toPostgresVersion`
 // +kubebuilder:validation:XValidation:rule=`!has(self.transferMethod) || (self.toPostgresVersion < 12 ? self.transferMethod in ["Copy","Link"] : true)`,message="Only Copy or Link before PostgreSQL 12"
 // +kubebuilder:validation:XValidation:rule=`!has(self.transferMethod) || (self.toPostgresVersion < 17 ? self.transferMethod in ["Clone","Copy","Link"] : true)`,message="Only Clone, Copy, or Link before PostgreSQL 17"
+// +kubebuilder:validation:XValidation:rule=`!has(self.transferMethod) || (self.toPostgresVersion < 18 ? self.transferMethod in ["Clone","Copy","CopyFileRange","Link"] : true)`,message="Only Clone, Copy, CopyFileRange, or Link before PostgreSQL 18"
 type PGUpgradeSettings struct {
 
 	// The major version of PostgreSQL before the upgrade.
@@ -109,12 +110,13 @@ type PGUpgradeSettings struct {
 	// - Copy and Link forever:  https://git.postgresql.org/gitweb/?p=postgresql.git;f=src/bin/pg_upgrade/pg_upgrade.h;hb=REL_10_0#l232
 	// - Clone since 12:         https://git.postgresql.org/gitweb/?p=postgresql.git;f=src/bin/pg_upgrade/pg_upgrade.h;hb=REL_12_0#l232
 	// - CopyFileRange since 17: https://git.postgresql.org/gitweb/?p=postgresql.git;f=src/bin/pg_upgrade/pg_upgrade.h;hb=REL_17_0#l251
+	// - Swap since 18:          https://git.postgresql.org/gitweb/?p=postgresql.git;f=src/bin/pg_upgrade/pg_upgrade.h;hb=REL_18_0#l256
 	//
 	// Kubernetes assumes the evaluation cost of an enum value is very large.
 	// TODO(k8s-1.29): Drop MaxLength after Kubernetes 1.29; https://issue.k8s.io/119511
 	// +kubebuilder:validation:MaxLength=15
 	//
-	// +kubebuilder:validation:Enum={Clone,Copy,CopyFileRange,Link}
+	// +kubebuilder:validation:Enum={Clone,Copy,CopyFileRange,Link,Swap}
 	// +optional
 	TransferMethod string `json:"transferMethod,omitempty"`
 }
