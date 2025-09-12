@@ -71,7 +71,7 @@ linters:
     depguard:
       rules:
         everything:
-          files: ['$all']
+          files: ["$all"]
           list-mode: lax
           allow:
             - go.opentelemetry.io/otel/semconv/v1.27.0
@@ -83,19 +83,21 @@ linters:
             - pkg: math/rand$
               desc: Use the "math/rand/v2" package instead. See https://go.dev/doc/go1.22#math_rand_v2
         not-tests:
-          files: ['!$test','!**/internal/testing/**']
+          files: ["!$test", "!**/internal/testing/**"]
           list-mode: lax
           deny:
             - pkg: net/http/httptest
               desc: Should be used only in tests.
             - pkg: testing/*
               desc: The "testing" packages should be used only in tests.
+            - pkg: github.com/crunchydata/postgres-operator/internal/crd/*
+              desc: The "internal/crd" packages should be used only in tests.
             - pkg: github.com/crunchydata/postgres-operator/internal/testing/*
               desc: The "internal/testing" packages should be used only in tests.
             - pkg: k8s.io/client-go/discovery
               desc: Use the "internal/kubernetes" package instead.
         tests:
-          files: ['$test']
+          files: ["$test"]
           list-mode: lax
           deny:
             - pkg: github.com/pkg/errors
@@ -150,7 +152,7 @@ linters:
     rules:
       # It is fine for tests to use "math/rand" packages.
       - linters: [gosec]
-        path: '(.+)_test[.]go'
+        path: "(.+)_test[.]go"
         text: weak random number generator
 
       # This internal package is the one place we want to do API discovery.

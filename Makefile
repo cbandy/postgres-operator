@@ -239,10 +239,10 @@ config/crd/openapi.json:
 
 .PHONY: generate-crd
 generate-crd: ## Generate Custom Resource Definitions (CRDs)
-	$(CONTROLLER) \
-		crd:crdVersions='v1' \
-		paths='./pkg/apis/...' \
-		output:dir='config/crd/bases' # {directory}/{group}_{plural}.yaml
+	$(CONTROLLER) $(\
+		) crd paths='./pkg/apis/...' $(\
+		) output:dir='config/crd/bases' # {directory}/{group}_{plural}.yaml
+	$(GO) generate ./internal/crd
 
 .PHONY: generate-collector
 generate-collector: ## Generate OTel Collector files
@@ -250,13 +250,13 @@ generate-collector: ## Generate OTel Collector files
 
 .PHONY: generate-deepcopy
 generate-deepcopy: ## Generate DeepCopy functions
-	$(CONTROLLER) \
-		object:headerFile='hack/boilerplate.go.txt' \
-		paths='./pkg/apis/postgres-operator.crunchydata.com/...'
+	$(CONTROLLER) $(\
+		) object:headerFile='hack/boilerplate.go.txt' $(\
+		) paths='./pkg/apis/postgres-operator.crunchydata.com/...'
 
 .PHONY: generate-rbac
 generate-rbac: ## Generate RBAC
-	$(CONTROLLER) \
-		rbac:roleName='postgres-operator' \
-		paths='./cmd/...' paths='./internal/...' \
-		output:dir='config/rbac' # {directory}/role.yaml
+	$(CONTROLLER) $(\
+		) rbac:roleName='postgres-operator' $(\
+		) paths='./cmd/...' paths='./internal/...' $(\
+		) output:dir='config/rbac' # directory/role.yaml
