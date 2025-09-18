@@ -126,7 +126,7 @@ type PostgresClusterSpec struct {
 	OpenShift *bool `json:"openshift,omitempty"`
 
 	// +optional
-	Patroni *v1beta1.PatroniSpec `json:"patroni,omitempty"`
+	Patroni *PatroniSpec `json:"patroni,omitempty"`
 
 	// Suspends the rollout and reconciliation of changes made to the
 	// PostgresCluster spec.

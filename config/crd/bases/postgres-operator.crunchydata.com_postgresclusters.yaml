@@ -12965,6 +12965,9 @@ spec:
                           More info: https://kubernetes.io/docs/reference/kubernetes-api/common-definitions/quantity
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
+                        x-kubernetes-validations:
+                        - message: cannot be smaller than 25M
+                          rule: '!self.isLessThan(quantity("25M"))'
                     required:
                     - storageLimit
                     type: object
@@ -13016,6 +13019,9 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+                x-kubernetes-validations:
+                - message: syncPeriodSeconds must be less than leaderLeaseDurationSeconds
+                  rule: self.syncPeriodSeconds < self.leaderLeaseDurationSeconds
               paused:
                 description: |-
                   Suspends the rollout and reconciliation of changes made to the
