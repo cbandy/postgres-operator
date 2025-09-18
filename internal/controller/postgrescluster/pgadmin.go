@@ -322,6 +322,7 @@ func (r *Reconciler) reconcilePGAdminStatefulSet(
 	// Do not add environment variables describing services in this namespace.
 	sts.Spec.Template.Spec.EnableServiceLinks = initialize.Bool(false)
 
+	sts.Spec.Template.Spec.HostUsers = initialize.Pointer(false)
 	sts.Spec.Template.Spec.SecurityContext = postgres.PodSecurityContext(cluster)
 
 	// set the image pull secrets, if any exist

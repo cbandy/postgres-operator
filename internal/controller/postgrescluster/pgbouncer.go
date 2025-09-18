@@ -489,6 +489,7 @@ func (r *Reconciler) generatePGBouncerDeployment(
 	if initialize.FromPointer(cluster.Spec.OpenShift) {
 		fsGroup = 0
 	}
+	deploy.Spec.Template.Spec.HostUsers = initialize.Pointer(false)
 	deploy.Spec.Template.Spec.SecurityContext = util.PodSecurityContext(int64(fsGroup),
 		cluster.Spec.SupplementalGroups,
 	)

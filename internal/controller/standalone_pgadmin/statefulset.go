@@ -117,6 +117,7 @@ func (r *PGAdminReconciler) statefulset(
 	// set the image pull secrets, if any exist
 	sts.Spec.Template.Spec.ImagePullSecrets = pgadmin.Spec.ImagePullSecrets
 
+	sts.Spec.Template.Spec.HostUsers = initialize.Pointer(false)
 	sts.Spec.Template.Spec.SecurityContext = podSecurityContext(ctx)
 
 	pod(pgadmin, configmap, &sts.Spec.Template.Spec, dataVolume)

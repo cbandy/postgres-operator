@@ -1372,6 +1372,7 @@ func generateInstanceStatefulSetIntent(_ context.Context,
 	// - https://releases.k8s.io/v1.23.0/pkg/kubelet/kubelet_pods.go#L553-L563
 	sts.Spec.Template.Spec.EnableServiceLinks = initialize.Bool(false)
 
+	sts.Spec.Template.Spec.HostUsers = initialize.Pointer(false)
 	sts.Spec.Template.Spec.SecurityContext = postgres.PodSecurityContext(cluster)
 
 	// Set the image pull secrets, if any exist.

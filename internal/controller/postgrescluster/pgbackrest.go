@@ -680,6 +680,7 @@ func (r *Reconciler) generateRepoHostIntent(ctx context.Context, postgresCluster
 	// Do not add environment variables describing services in this namespace.
 	repo.Spec.Template.Spec.EnableServiceLinks = initialize.Bool(false)
 
+	repo.Spec.Template.Spec.HostUsers = initialize.Pointer(false)
 	repo.Spec.Template.Spec.SecurityContext = postgres.PodSecurityContext(postgresCluster)
 
 	repo.Spec.Template.Spec.ServiceAccountName = saName
@@ -889,6 +890,7 @@ func (r *Reconciler) generateBackupJobSpecIntent(ctx context.Context, postgresCl
 	} else {
 		// If we are doing a cloud repo backup, we need to give pgbackrest proper permissions
 		// to read certificate files
+		jobSpec.Template.Spec.HostUsers = initialize.Pointer(false)
 		jobSpec.Template.Spec.SecurityContext = postgres.PodSecurityContext(postgresCluster)
 		pgbackrest.AddConfigToCloudBackupJob(postgresCluster, &jobSpec.Template)
 
@@ -1394,6 +1396,7 @@ func (r *Reconciler) generateRestoreJobIntent(cluster *v1beta1.PostgresCluster,
 	// Do not add environment variables describing services in this namespace.
 	job.Spec.Template.Spec.EnableServiceLinks = initialize.Bool(false)
 
+	job.Spec.Template.Spec.HostUsers = initialize.Pointer(false)
 	job.Spec.Template.Spec.SecurityContext = postgres.PodSecurityContext(cluster)
 
 	// set the priority class name, if it exists
