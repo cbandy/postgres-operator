@@ -418,7 +418,8 @@ func TestGeneratePostgresUserSecret(t *testing.T) {
 		if assert.Check(t, secret != nil) {
 			assert.Equal(t, string(secret.Data["dbname"]), "db1")
 			assert.Assert(t, cmp.Regexp(
-				`^postgresql://some-user-name:[^@]+@hippo2-primary.ns1.svc:9999/db1$`,
+				`^postgresql://hippo2-primary.ns1.svc:9999/db1`+
+					`[?]password=[^&]+&user=some-user-name$`,
 				string(secret.Data["uri"])))
 			assert.Assert(t, cmp.Regexp(
 				`^jdbc:postgresql://hippo2-primary.ns1.svc:9999/db1`+
@@ -435,7 +436,7 @@ func TestGeneratePostgresUserSecret(t *testing.T) {
 		if assert.Check(t, secret != nil) {
 			assert.Equal(t, string(secret.Data["dbname"]), "first")
 			assert.Assert(t, cmp.Regexp(
-				`^postgresql://some-user-name:[^@]+@hippo2-primary.ns1.svc:9999/first$`,
+				`^postgresql://hippo2-primary.ns1.svc:9999/first[?].+$`,
 				string(secret.Data["uri"])))
 			assert.Assert(t, cmp.Regexp(
 				`^jdbc:postgresql://hippo2-primary.ns1.svc:9999/first[?].+$`,
@@ -468,7 +469,8 @@ func TestGeneratePostgresUserSecret(t *testing.T) {
 
 		if assert.Check(t, secret != nil) {
 			assert.Assert(t, cmp.Regexp(
-				`^postgresql://some-user-name:[^@]+@hippo2-pgbouncer.ns1.svc:10220/yes$`,
+				`^postgresql://hippo2-pgbouncer.ns1.svc:10220/yes`+
+					`[?]password=[^&]+&user=some-user-name$`,
 				string(secret.Data["pgbouncer-uri"])))
 			assert.Assert(t, cmp.Regexp(
 				`^jdbc:postgresql://hippo2-pgbouncer.ns1.svc:10220/yes`+

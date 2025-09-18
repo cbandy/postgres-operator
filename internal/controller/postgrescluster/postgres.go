@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -250,25 +249,16 @@ func (r *Reconciler) generatePostgresUserSecret(
 	if len(spec.Databases) > 0 {
 		database := spec.Databases[0]
 
-		intent.Data["dbname"] = []byte(database)
-		intent.Data["uri"] = []byte((&url.URL{
-			Scheme: "postgresql",
-			User:   url.UserPassword(username, string(intent.Data["password"])),
-			Host:   net.JoinHostPort(hostname, port),
-			Path:   database,
-		}).String())
+		info := postgres.Connect{
+			Database:  database,
+			User:      username,
+			Password:  string(intent.Data["password"]),
+			HostPorts: []string{net.JoinHostPort(hostname, port)},
+		}
 
-		// The JDBC driver requires a different URI scheme and query component.
-		// - https://jdbc.postgresql.org/documentation/use/#connection-parameters
-		query := url.Values{}
-		query.Set("user", username)
-		query.Set("password", string(intent.Data["password"]))
-		intent.Data["jdbc-uri"] = []byte((&url.URL{
-			Scheme:   "jdbc:postgresql",
-			Host:     net.JoinHostPort(hostname, port),
-			Path:     database,
-			RawQuery: query.Encode(),
-		}).String())
+		intent.Data["dbname"] = []byte(database)
+		intent.Data["jdbc-uri"] = []byte(info.JDBC())
+		intent.Data["uri"] = []byte(info.URI())
 	}
 
 	// When PgBouncer is enabled, include values for connecting through it.
@@ -283,28 +273,19 @@ func (r *Reconciler) generatePostgresUserSecret(
 		if len(spec.Databases) > 0 {
 			database := spec.Databases[0]
 
-			intent.Data["pgbouncer-uri"] = []byte((&url.URL{
-				Scheme: "postgresql",
-				User:   url.UserPassword(username, string(intent.Data["password"])),
-				Host:   net.JoinHostPort(hostname, port),
-				Path:   database,
-			}).String())
+			info := postgres.Connect{
+				Database:  database,
+				User:      username,
+				Password:  string(intent.Data["password"]),
+				HostPorts: []string{net.JoinHostPort(hostname, port)},
+			}
 
-			// The JDBC driver requires a different URI scheme and query component.
-			// Disable prepared statements to be compatible with PgBouncer's
-			// transaction pooling.
-			// - https://jdbc.postgresql.org/documentation/use/#connection-parameters
+			intent.Data["pgbouncer-uri"] = []byte(info.URI())
+
+			// Disable prepared statements to be compatible with PgBouncer's transaction pooling.
 			// - https://www.pgbouncer.org/faq.html#how-to-use-prepared-statements-with-transaction-pooling
-			query := url.Values{}
-			query.Set("user", username)
-			query.Set("password", string(intent.Data["password"]))
-			query.Set("prepareThreshold", "0")
-			intent.Data["pgbouncer-jdbc-uri"] = []byte((&url.URL{
-				Scheme:   "jdbc:postgresql",
-				Host:     net.JoinHostPort(hostname, port),
-				Path:     database,
-				RawQuery: query.Encode(),
-			}).String())
+			info.Parameters = map[string]string{"prepareThreshold": "0"}
+			intent.Data["pgbouncer-jdbc-uri"] = []byte(info.JDBC())
 		}
 	}
 
