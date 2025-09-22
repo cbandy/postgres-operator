@@ -6,6 +6,7 @@ package v1beta1
 
 import (
 	"encoding/json"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -231,6 +232,22 @@ func (in SchemalessObject) DeepCopy() SchemalessObject {
 	return runtime.DeepCopyJSON(in)
 }
 
+////if spec.NodePort != nil {
+////	if service.Spec.Type == corev1.ServiceTypeClusterIP {
+////		// The NodePort can only be set when the Service type is NodePort or
+////		// LoadBalancer. However, due to a known issue prior to Kubernetes
+////		// 1.20, we clear these errors during our apply. To preserve the
+////		// appropriate behavior, we log an Event and return an error.
+////		// TODO(tjmoore4): Once Validation Rules are available, this check
+////		// and event could potentially be removed in favor of that validation
+////		r.Recorder.Eventf(cluster, corev1.EventTypeWarning, "MisconfiguredClusterIP",
+////			"NodePort cannot be set with type ClusterIP on Service %q", service.Name)
+////		return nil, fmt.Errorf("NodePort cannot be set with type ClusterIP on Service %q", service.Name)
+////	}
+////	servicePort.NodePort = *spec.NodePort
+////}
+
+// +kubebuilder:validation:XValidation:rule=“
 type ServiceSpec struct {
 	// +optional
 	Metadata *Metadata `json:"metadata,omitempty"`
@@ -271,6 +288,33 @@ type ServiceSpec struct {
 	// +optional
 	// +kubebuilder:validation:Enum={Cluster,Local}
 	ExternalTrafficPolicy *corev1.ServiceExternalTrafficPolicy `json:"externalTrafficPolicy,omitempty"`
+}
+
+func (s *ServiceSpec) AsServiceSpec(ports ...corev1.ServicePort) corev1.ServiceSpec {
+	out := corev1.ServiceSpec{
+		Ports: slices.Clone(ports),
+		Type:  corev1.ServiceType(s.Type),
+	}
+
+	if s.ExternalTrafficPolicy != nil {
+		out.ExternalTrafficPolicy = *s.ExternalTrafficPolicy
+	}
+
+	if s.InternalTrafficPolicy != nil {
+		value := *s.InternalTrafficPolicy
+		out.InternalTrafficPolicy = &value
+	}
+
+	if s.IPFamilies != nil {
+		out.IPFamilies = slices.Clone(s.IPFamilies)
+	}
+
+	if s.IPFamilyPolicy != nil {
+		value := *s.IPFamilyPolicy
+		out.IPFamilyPolicy = &value
+	}
+
+	return out
 }
 
 // Sidecar defines the configuration of a sidecar container
