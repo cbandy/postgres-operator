@@ -105,7 +105,9 @@ func InstancePod(ctx context.Context,
 		}
 	}
 
-	container.Command = []string{"patroni", configDirectory}
+	container.Command = []string{"sh", "-ceu", "--",
+		postgres.ShellPath(inCluster.Spec.PostgresVersion) +
+			`; exec "$@"`, "--", "patroni", configDirectory}
 
 	container.Env = append(container.Env,
 		instanceEnvironment(inCluster, inClusterPodService, inPatroniLeaderService,

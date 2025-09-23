@@ -140,6 +140,14 @@ func TestInstancePod(t *testing.T) {
 	assert.Assert(t, cmp.MarshalMatches(template.Spec, `
 containers:
 - command:
+  - sh
+  - -ceu
+  - --
+  - |-
+    for dir in '/usr/lib/postgresql/11/bin' '/usr/libexec/postgresql11' '/usr/pgsql-11/bin'; do
+      [ -d "${dir}" ] && PATH="${dir}${PATH+:${PATH}}"
+    done; exec "$@"
+  - --
   - patroni
   - /etc/patroni
   env:

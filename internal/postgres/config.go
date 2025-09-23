@@ -264,6 +264,20 @@ func Environment(cluster *v1beta1.PostgresCluster) []corev1.EnvVar {
 	}
 }
 
+// ShellPath returns a POSIX shell command that prepends typical Postgres executable paths to the PATH variable.
+func ShellPath(postgresVersion int32) string {
+	return fmt.Sprintf(`for dir in `+strings.Join(
+		[]string{
+			`'/usr/lib/postgresql/%[1]d/bin'`, // Debian
+			`'/usr/libexec/postgresql%[1]d'`,  // Alpine
+			`'/usr/pgsql-%[1]d/bin'`,          // Red Hat
+		}, " ")+
+		"; do\n"+
+		`  [ -d "${dir}" ] && PATH="${dir}${PATH+:${PATH}}"`+
+		"\ndone",
+		postgresVersion)
+}
+
 // reloadCommand returns an entrypoint that convinces PostgreSQL to reload
 // certificate files when they change. The process will appear as name in `ps`
 // and `top`.
@@ -394,7 +408,7 @@ func startupCommand(
 	instance *v1beta1.PostgresInstanceSetSpec,
 	parameters *ParameterSet,
 ) []string {
-	version := fmt.Sprint(cluster.Spec.PostgresVersion)
+	version := cluster.Spec.PostgresVersion
 	dataDir := DataDirectory(cluster)
 	logDir := parameters.Value("log_directory")
 	walDir := WALDirectory(cluster, instance)
@@ -452,7 +466,7 @@ chmod +x /tmp/pg_rewind_tde.sh
 `
 	}
 
-	args := []string{version, walDir}
+	args := []string{fmt.Sprint(version), walDir}
 	script := strings.Join([]string{
 		`declare -r expected_major_version="$1" pgwal_directory="$2"`,
 
@@ -473,6 +487,9 @@ chmod +x /tmp/pg_rewind_tde.sh
 
 		// Function to change a directory symlink while keeping the directory contents.
 		strings.TrimSpace(bashSafeLink),
+
+		// Prioritize executables for this major version of Postgres.
+		ShellPath(version),
 
 		// Log the effective user ID and all the group IDs.
 		`echo Initializing ...`,

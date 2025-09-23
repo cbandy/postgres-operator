@@ -547,6 +547,37 @@ func TestBashSafeLink(t *testing.T) {
 	})
 }
 
+func TestShellPath(t *testing.T) {
+	t.Parallel()
+
+	script := ShellPath(11)
+
+	assert.Assert(t, cmp.Contains(script, `'/usr/lib/postgresql/11/bin'`))
+	assert.Assert(t, cmp.Contains(script, `'/usr/libexec/postgresql11'`))
+	assert.Assert(t, cmp.Contains(script, `'/usr/pgsql-11/bin'`))
+
+	t.Run("ShellCheckPOSIX", func(t *testing.T) {
+		shellcheck := require.ShellCheck(t)
+
+		dir := t.TempDir()
+		file := filepath.Join(dir, "script.sh")
+		assert.NilError(t, os.WriteFile(file, []byte(script), 0o600))
+
+		// Expect ShellCheck for "sh" to be happy.
+		// - https://www.shellcheck.net/wiki/SC2148
+		cmd := exec.CommandContext(t.Context(), shellcheck, "--enable=all", "--shell=sh", file)
+		output, err := cmd.CombinedOutput()
+		assert.NilError(t, err, "%q\n%s", cmd.Args, output)
+	})
+
+	t.Run("PrettyYAML", func(t *testing.T) {
+		b, err := yaml.Marshal(script)
+		assert.NilError(t, err)
+		assert.Assert(t, strings.HasPrefix(string(b), `|`),
+			"expected literal block scalar, got:\n%s", b)
+	})
+}
+
 func TestStartupCommand(t *testing.T) {
 	shellcheck := require.ShellCheck(t)
 	t.Parallel()
@@ -571,7 +602,7 @@ func TestStartupCommand(t *testing.T) {
 	assert.NilError(t, os.WriteFile(file, []byte(script), 0o600))
 
 	// Expect shellcheck to be happy.
-	cmd := exec.CommandContext(t.Context(), shellcheck, "--enable=all", file)
+	cmd := exec.CommandContext(t.Context(), shellcheck, "--enable=all", "--exclude=SC2292", file)
 	output, err := cmd.CombinedOutput()
 	assert.NilError(t, err, "%q\n%s", cmd.Args, output)
 
